@@ -347,7 +347,7 @@ EOF
             const reader = new FileReader();
             reader.onload = () => {
               const base64String = reader.result.split(',')[1];
-              resolve(base64String);
+              resolve(base64String[1]);
             };
             reader.onerror = () => reject(new Error("File conversion aborted."));
             reader.readAsDataURL(file);
