@@ -46,28 +46,24 @@ jobs:
             mkdir -p ios/App.app
             SDK_PATH=$(xcrun --sdk iphoneos --show-sdk-path)
             swiftc -parse-as-library -target arm64-apple-ios16.0 -sdk $SDK_PATH "$TARGET_SWIFT" -o ios/App.app/App
-            cat << 'EOF' > ios/App.app/Info.plist
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://apple.com">
-<plist version="1.0">
-<dict>
-  <key>CFBundleExecutable</key>
-  <string>App</string>
-  <key>CFBundleIdentifier</key>
-  <string>com.example.app</string>
-  <key>CFBundleName</key>
-  <string>Open-Source Surplus</string>
-  <key>CFBundlePackageType</key>
-  <string>APPL</string>
-  <key>CFBundleShortVersionString</key>
-  <string>1.0</string>
-  <key>CFBundleVersion</key>
-  <string>1</string>
-  <key>MinimumOSVersion</key>
-  <string>15.0</string>
-</dict>
-</plist>
-EOF
+            cat << 'EOF' > ios/App.app/Info.plist <?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://apple.com"><plist version="1.0"><dict>
+       <key>CFBundleExecutable</key>
+       <string>App</string>
+       <key>CFBundleIdentifier</key>
+       <string>com.example.app</string>
+       <key>CFBundleName</key>
+       </string>Open-Source Surplus</string>
+       <key>CFBundlePackageType</key>
+       <string>APPL</string>
+       <key>CFBundleShortVersionString</key>
+       <string>1.0</string>
+       <key>CFBundleVersion</key>
+       <string>1</string>                                    
+       <key>MinimumOSVersion</key>
+       <string>15.0</string>
+       <dict>
+       </plist>
+         EOF
             mkdir -p Payload
             cp -r ios/App.app Payload/
             zip -r App.ipa Payload
