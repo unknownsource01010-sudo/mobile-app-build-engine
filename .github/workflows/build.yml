@@ -35,7 +35,7 @@ jobs:
           retention-days: 1
   build-ios:
    runs-on: macos-latest
-   steps:
+   step:
       - name: Checkout Repository
         uses: actions/checkout@v4
       - name: Compile iOS Application & Package IPA
