@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent" android:layout_height="match_parent" android:background="@color/black">
+
+    <LinearLayout android:id="@+id/mainContent" android:layout_width="match_parent" android:layout_height="match_parent"
+        android:orientation="vertical" android:paddingLeft="12dp" android:paddingTop="12dp" android:paddingRight="12dp" android:paddingBottom="28dp">
+
+        <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:text="Brain Fuze" android:textColor="@color/text" android:textSize="24sp" android:textStyle="bold" />
+        <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:text="Shared Intelligence. Shared Memory." android:textColor="@color/accent" android:textSize="12sp" />
+
+        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:gravity="center_vertical">
+            <Spinner android:id="@+id/projectSpinner" android:layout_width="0dp" android:layout_height="48dp" android:layout_weight="1" />
+            <Button android:id="@+id/newProjectButton" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="+ Project" />
+        </LinearLayout>
+        <TextView android:id="@+id/projectStats" android:layout_width="match_parent" android:layout_height="wrap_content" android:textColor="@color/muted" android:textSize="11sp" />
+
+        <HorizontalScrollView android:layout_width="match_parent" android:layout_height="wrap_content">
+            <LinearLayout android:layout_width="wrap_content" android:layout_height="wrap_content" android:orientation="horizontal">
+                <Button android:id="@+id/importPdfButton" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Import PDF" />
+                <Button android:id="@+id/memoryButton" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Memory" />
+                <Button android:id="@+id/settingsButton" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="API Keys" />
+                <Button android:id="@+id/exportButton" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Copy Chat" />
+                <Button android:id="@+id/clearButton" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Clear" />
+                <Button android:id="@+id/aboutButton" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="About" />
+            </LinearLayout>
+        </HorizontalScrollView>
+
+        <ScrollView android:id="@+id/chatScroll" android:layout_width="match_parent" android:layout_height="0dp"
+            android:layout_weight="1" android:background="@color/panel" android:padding="10dp" android:layout_marginTop="6dp">
+            <TextView android:id="@+id/chatDisplay" android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:textColor="@color/text" android:textSize="14sp" android:textIsSelectable="true" />
+        </ScrollView>
+
+        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:gravity="center_vertical">
+            <CheckBox android:id="@+id/openAiCheck" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="OpenAI" android:textColor="@color/text" android:checked="true" />
+            <CheckBox android:id="@+id/geminiCheck" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Gemini" android:textColor="@color/text" android:checked="true" />
+            <CheckBox android:id="@+id/saveMemoryCheck" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Remember" android:textColor="@color/text" android:checked="true" />
+        </LinearLayout>
+
+        <EditText android:id="@+id/messageInput" android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:hint="Message the selected brain(s)..." android:textColor="@color/text" android:textColorHint="@color/muted"
+            android:backgroundTint="@color/accent" android:inputType="textMultiLine" android:minLines="3" android:maxLines="7" />
+        <Button android:id="@+id/sendButton" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Fuze with selected AI" />
+        <ProgressBar android:id="@+id/loadingBar" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_gravity="center" android:visibility="gone" />
+    </LinearLayout>
+
+    <FrameLayout android:id="@+id/introOverlay" android:layout_width="match_parent" android:layout_height="match_parent" android:background="#FF02030A" android:clickable="true">
+        <ImageView android:id="@+id/brainLeft" android:layout_width="260dp" android:layout_height="330dp" android:layout_gravity="top|left" android:layout_marginTop="90dp" android:scaleType="centerInside" android:src="@drawable/brain_blue" />
+        <ImageView android:id="@+id/brainRight" android:layout_width="260dp" android:layout_height="330dp" android:layout_gravity="top|right" android:layout_marginTop="90dp" android:scaleType="centerInside" android:src="@drawable/brain_orange" />
+        <ImageView android:id="@+id/brainFused" android:layout_width="360dp" android:layout_height="560dp" android:layout_gravity="center" android:scaleType="centerInside" android:src="@drawable/brain_fused" />
+        <TextView android:id="@+id/introTitle" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_gravity="bottom" android:layout_marginBottom="56dp" android:gravity="center" android:text="BRAIN FUZE\nShared Intelligence. Shared Memory." android:textColor="#FFFFFFFF" android:textSize="22sp" android:textStyle="bold" />
+    </FrameLayout>
+</FrameLayout>
