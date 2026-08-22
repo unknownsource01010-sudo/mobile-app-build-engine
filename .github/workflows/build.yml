@@ -20,12 +20,22 @@ jobs:
           gradle-version: '8.5'
       - name: Build Android APK
         run: |
-          TARGET_DIR=$(find . -name "build.gradle" -exec dirname {} \; | head -n 1)
-          if [ -n "$TARGET_DIR" ]; then
+          PROJECT_ROOT="build-source"
+          WRAPPER=$(find "$PROJECT_ROOT" -name "gradlew" -type f | head -n 1)
+          if [ -n "$WRAPPER" ]; then
+            TARGET_DIR=$(dirname "$WRAPPER")
             cd "$TARGET_DIR"
-            if [ -f "gradlew" ]; then
-              chmod +x gradlew; ./gradlew assembleDebug;
+            chmod +x gradlew
+            ./gradlew assembleDebug
+          else
+            TARGET_GRADLE=$(find "$PROJECT_ROOT" -name "build.gradle" -type f | head -n 1)
+            if [ -z "$TARGET_GRADLE" ]; then
+              echo "No Android Gradle project found under build-source"
+              exit 1
             fi
+            TARGET_DIR=$(dirname "$TARGET_GRADLE")
+            cd "$TARGET_DIR"
+            gradle assembleDebug
           fi
       - name: Upload Working Android APK
         uses: actions/upload-artifact@v4
@@ -33,43 +43,51 @@ jobs:
           name: app-debug-apk
           path: "**/build/outputs/apk/**/*.apk"
           retention-days: 1
+
   build-ios:
-     runs-on: macos-latest
-     steps:
+    runs-on: macos-latest
+    steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
       - name: Compile iOS Application & Package IPA
+        shell: bash
         run: |
-          TARGET_SWIFT=$(find . -name "ContentView.swift" | head -n 1)
-          if [ -n "$TARGET_SWIFT" ]; then
-            mkdir -p ios/App.app
-            SDK_PATH=$(xcrun --sdk iphoneos --show-sdk-path)
-            swiftc -parse-as-library -target arm64-apple-ios16.0 -sdk $SDK_PATH "$TARGET_SWIFT" -o ios/App.app/App
-            cat << 'EOF' > ios/App.app/Info.plist <?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://apple.com"><plist version="1.0"><dict>
-       <key>CFBundleExecutable</key>
-       <string>App</string>
-       <key>CFBundleIdentifier</key>
-       <string>com.example.app</string>
-       <key>CFBundleName</key>
-       </string>Open-Source Surplus</string>
-       <key>CFBundlePackageType</key>
-       <string>APPL</string>
-       <key>CFBundleShortVersionString</key>
-       <string>1.0</string>
-       <key>CFBundleVersion</key>
-       <string>1</string>                                    
-       <key>MinimumOSVersion</key>
-       <string>15.0</string>
-       <dict>
-       </plist>
-         EOF
-            mkdir -p Payload
-            cp -r ios/App.app Payload/
-            zip -r App.ipa Payload
+          set -euo pipefail
+          TARGET_SWIFT=$(find build-source -name "ContentView.swift" -type f | head -n 1)
+          if [ -z "$TARGET_SWIFT" ]; then
+            echo "No ContentView.swift found under build-source"
+            exit 1
           fi
+
+          mkdir -p ios/App.app
+          SDK_PATH=$(xcrun --sdk iphoneos --show-sdk-path)
+
+          swiftc             -parse-as-library             -target arm64-apple-ios16.0             -sdk "$SDK_PATH"             "$TARGET_SWIFT"             -o ios/App.app/App
+
+          chmod +x ios/App.app/App
+
+          plutil -create xml1 ios/App.app/Info.plist
+          plutil -insert CFBundleExecutable -string App ios/App.app/Info.plist
+          plutil -insert CFBundleIdentifier -string com.example.app ios/App.app/Info.plist
+          plutil -insert CFBundleName -string App ios/App.app/Info.plist
+          plutil -insert CFBundleDisplayName -string App ios/App.app/Info.plist
+          plutil -insert CFBundlePackageType -string APPL ios/App.app/Info.plist
+          plutil -insert CFBundleShortVersionString -string 1.0 ios/App.app/Info.plist
+          plutil -insert CFBundleVersion -string 1 ios/App.app/Info.plist
+          plutil -insert MinimumOSVersion -string 16.0 ios/App.app/Info.plist
+          plutil -insert UIDeviceFamily -json '[1,2]' ios/App.app/Info.plist
+
+          rm -rf Payload App.ipa
+          mkdir -p Payload
+          cp -R ios/App.app Payload/App.app
+          zip -qry App.ipa Payload
+
+          test -s App.ipa
+          echo "Created App.ipa successfully"
       - name: Upload ESign-Ready iOS IPA
         uses: actions/upload-artifact@v4
         with:
           name: app-ios-ipa
           path: App.ipa
+          if-no-files-found: error
           retention-days: 1
