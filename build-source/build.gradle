@@ -1,0 +1,26 @@
+plugins { 
+    id 'com.android.application' 
+}
+
+android {
+    namespace 'com.wizzy.memorybank'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId 'com.wizzy.memorybank'
+        minSdk 26
+        targetSdk 35
+        versionCode 4
+        versionName '3.1.0'
+    }
+}
+
+dependencies {
+    // Core AndroidX and UI Libraries (Fixes the AppCompatActivity error)
+    implementation 'androidx.appcompat:appcompat:1.7.0'
+    implementation 'com.google.android.material:material:1.12.0'
+    implementation 'androidx.constraintlayout:constraintlayout:2.2.0'
+    
+    // Your PDF library
+    implementation 'com.tom-roush:pdfbox-android:2.0.27.0'
+}
