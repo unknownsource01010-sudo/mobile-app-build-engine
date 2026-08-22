@@ -33,10 +33,9 @@ jobs:
           name: app-debug-apk
           path: "**/build/outputs/apk/**/*.apk"
           retention-days: 1
-
   build-ios:
-    runs-on: macos-latest
-    steps:
+   runs-on: macos-latest
+   steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
       - name: Compile iOS Application & Package IPA
