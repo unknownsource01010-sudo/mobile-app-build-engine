@@ -16,6 +16,35 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Apply shape-carver tuning
+        run: |
+          set -euxo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('apps/ObjectForge3D/ObjectForge3D/ContentView.swift')
+          s = p.read_text()
+          replacements = [
+              ('var gridSize: Int = 88', 'var gridSize: Int = 96'),
+              ('chosen = zip(chosen, saturation).map { max($0.0, $0.1 * 0.78) }', 'chosen = zip(chosen, saturation).map { max($0.0, $0.1 * 0.62) }'),
+              ('var binary = chosen.map { $0 >= 0.47 }', 'var binary = chosen.map { $0 >= 0.50 }'),
+              ('grid: grid, iterations: 4)', 'grid: grid, iterations: 3)'),
+              ('var binary = filled.map { $0 > 0.43 }', 'var binary = filled.map { $0 > 0.48 }'),
+              ('for _ in 0..<4 {', 'for _ in 0..<6 {'),
+              ('let boundary = outsideNeighbors >= 2', 'let boundary = outsideNeighbors >= 1'),
+              ('let nearFrame = x < 5 || y < 5 || x >= grid - 5 || y >= grid - 5', 'let nearFrame = x < 7 || y < 7 || x >= grid - 7 || y >= grid - 7'),
+              ('let weakOuterShelf = boundary && c < 0.52 && center < 0.62', 'let weakOuterShelf = boundary && c < 0.62 && center < 0.72'),
+              ('let isolatedBlock = boundary && solidNeighbors <= 3 && c < 0.68', 'let isolatedBlock = boundary && solidNeighbors <= 5 && c < 0.76'),
+              ('let frameLeak = nearFrame && c < 0.75', 'let frameLeak = nearFrame && c < 0.86'),
+              ('return out.map { $0 < 0.36 ? 0 : min(1, $0) }', 'return out.map { $0 < 0.42 ? 0 : min(1, $0) }'),
+              ('return strong >= 3 && average >= 0.52', 'return strong >= 3 && average >= 0.56'),
+          ]
+          for old, new in replacements:
+              if old not in s:
+                  raise SystemExit(f'Missing expected patch target: {old}')
+              s = s.replace(old, new, 1)
+          p.write_text(s)
+          PY
+
       - name: Install XcodeGen
         run: |
           brew update
