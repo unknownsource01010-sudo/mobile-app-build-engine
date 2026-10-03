@@ -88,27 +88,41 @@ final class ReliefMeshBuilder {
         let grid = settings.gridSize
         let samples = try samplePixels(cgImage: cgImage, grid: grid)
         let luminance = samples.map { $0.l }
+        let reds = samples.map { $0.r }
+        let greens = samples.map { $0.g }
+        let blues = samples.map { $0.b }
 
         var mask = [Float](repeating: 1, count: grid * grid)
         if settings.removeBackground {
             let heuristicMask = makeForegroundMask(samples: samples, grid: grid, threshold: settings.backgroundThreshold)
             let otsuMask = makeOtsuForegroundMask(samples: samples, grid: grid)
+            let saturationMask = ObjectForgeMaskPuffMath.saturationMask(red: reds,
+                                                                        green: greens,
+                                                                        blue: blues,
+                                                                        threshold: max(0.09, settings.backgroundThreshold * 0.82))
             let visionMask: [Float]?
             if settings.useVisionForegroundMask, #available(iOS 17.0, *) {
                 visionMask = makeVisionForegroundMask(cgImage: cgImage, grid: grid)
             } else {
                 visionMask = nil
             }
-            mask = strictForegroundMask(vision: visionMask, heuristic: heuristicMask, otsu: otsuMask, grid: grid)
+            mask = strictForegroundMask(vision: visionMask,
+                                        heuristic: heuristicMask,
+                                        otsu: otsuMask,
+                                        saturation: saturationMask,
+                                        grid: grid)
         }
 
-        var heights = makeShapeAwareHeightMap(luminance: luminance, mask: mask, grid: grid, settings: settings)
+        let puff = ObjectForgeMaskPuffMath.distancePuff(mask: mask, grid: grid)
+        var heights = makeShapeAwareHeightMap(luminance: luminance, mask: mask, puff: puff, grid: grid, settings: settings)
         for _ in 0..<settings.smoothingPasses { heights = smooth(heights, grid: grid, mask: mask) }
+        heights = ObjectForgeMaskPuffMath.gaussian3x3(heights, grid: grid)
+
         if settings.subjectCutout && settings.removeBackground {
             let cutout = makeSubjectCutoutMesh(heights: heights, mask: mask, samples: samples, grid: grid, imageSize: image.size)
             if !cutout.isEmpty { return cutout }
         }
-        return makeFlatBackMesh(heights: heights, mask: mask, samples: samples, grid: grid, imageSize: image.size)
+        return makeFlatBackMesh(heights: heights, samples: samples, grid: grid, imageSize: image.size)
     }
 
     @available(iOS 17.0, *)
@@ -135,13 +149,7 @@ final class ReliefMeshBuilder {
     private func sampleMaskPixels(cgImage: CGImage, grid: Int) -> [Float]? {
         let colorSpace = CGColorSpaceCreateDeviceRGB()
         var bytes = [UInt8](repeating: 0, count: grid * grid * 4)
-        guard let bitmap = CGContext(data: &bytes,
-                                     width: grid,
-                                     height: grid,
-                                     bitsPerComponent: 8,
-                                     bytesPerRow: grid * 4,
-                                     space: colorSpace,
-                                     bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        guard let bitmap = CGContext(data: &bytes, width: grid, height: grid, bitsPerComponent: 8, bytesPerRow: grid * 4, space: colorSpace, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
         bitmap.interpolationQuality = .high
         bitmap.draw(cgImage, in: CGRect(x: 0, y: 0, width: grid, height: grid))
         var mask: [Float] = []
@@ -159,35 +167,35 @@ final class ReliefMeshBuilder {
         return cleanVisionMask(mask, grid: grid)
     }
 
-    private func strictForegroundMask(vision: [Float]?, heuristic: [Float], otsu: [Float], grid: Int) -> [Float] {
-        let chosen: [Float]
+    private func strictForegroundMask(vision: [Float]?, heuristic: [Float], otsu: [Float], saturation: [Float], grid: Int) -> [Float] {
+        var chosen: [Float]
         if let vision, usefulCoverage(vision) {
-            // Vision wins. The heuristic may only add very strong interior pixels, never flood the frame.
-            chosen = zip(vision, heuristic).map { max($0.0, $0.1 > 0.88 ? min($0.1, 0.55) : 0) }
+            chosen = zip(vision, heuristic).map { max($0.0, $0.1 > 0.90 ? min($0.1, 0.45) : 0) }
         } else if usefulCoverage(heuristic) {
             chosen = heuristic
         } else {
             chosen = otsu
         }
 
-        var binary = chosen.map { $0 >= 0.46 }
-        if foregroundCoverage(binary) > 0.62 {
-            binary = otsu.map { $0 >= 0.50 }
+        if saturation.count == chosen.count, usefulCoverage(saturation) {
+            chosen = zip(chosen, saturation).map { max($0.0, $0.1 * 0.78) }
         }
-        if foregroundCoverage(binary) > 0.62 {
-            // A near-full mask is the old square-slab failure mode. Punch out the frame and keep only the centered object island.
+
+        var binary = chosen.map { $0 >= 0.47 }
+        if foregroundCoverage(binary) > 0.60 {
+            binary = otsu.indices.map { max(otsu[$0], saturation.indices.contains($0) ? saturation[$0] : 0) >= 0.56 }
+        }
+        if foregroundCoverage(binary) > 0.60 {
             for y in 0..<grid {
-                for x in 0..<grid where x < 3 || y < 3 || x >= grid - 3 || y >= grid - 3 {
+                for x in 0..<grid where x < 4 || y < 4 || x >= grid - 4 || y >= grid - 4 {
                     binary[y * grid + x] = false
                 }
             }
         }
 
-        binary = closeBinaryHoles(binary, grid: grid)
-        binary = keepBestSubjectIsland(binary, grid: grid)
-        var out = binary.map { $0 ? Float(1) : Float(0) }
-        out = softenBinaryMask(out, grid: grid)
-        return out.map { $0 < 0.42 ? 0 : min(1, $0) }
+        var closed = ObjectForgeMaskPuffMath.closeInteriorHoles(binary.map { $0 ? Float(1) : Float(0) }, grid: grid, iterations: 4)
+        closed = ObjectForgeMaskPuffMath.gaussian3x3(closed, grid: grid)
+        return closed.map { $0 < 0.44 ? 0 : min(1, $0) }
     }
 
     private func usefulCoverage(_ mask: [Float]) -> Bool {
@@ -219,141 +227,10 @@ final class ReliefMeshBuilder {
         return out
     }
 
-    private func makeOtsuForegroundMask(samples: [PixelSample], grid: Int) -> [Float] {
-        let luminance = samples.map { max(0, min(1, $0.l)) }
-        var hist = [Int](repeating: 0, count: 256)
-        for l in luminance { hist[max(0, min(255, Int(l * 255)))] += 1 }
-        let total = luminance.count
-        var sumAll = 0
-        for i in 0..<256 { sumAll += i * hist[i] }
-        var sumB = 0
-        var weightB = 0
-        var bestVariance: Double = -1
-        var threshold = 127
-        for i in 0..<256 {
-            weightB += hist[i]
-            if weightB == 0 { continue }
-            let weightF = total - weightB
-            if weightF == 0 { break }
-            sumB += i * hist[i]
-            let meanB = Double(sumB) / Double(weightB)
-            let meanF = Double(sumAll - sumB) / Double(weightF)
-            let variance = Double(weightB) * Double(weightF) * pow(meanB - meanF, 2)
-            if variance > bestVariance {
-                bestVariance = variance
-                threshold = i
-            }
-        }
-        let borderAverage = averageBorderLuminance(samples: samples, grid: grid)
-        let centerAverage = averageCenterLuminance(samples: samples, grid: grid)
-        let subjectIsDarker = centerAverage < borderAverage
-        return luminance.map { l in
-            let v = Int(l * 255)
-            let hit = subjectIsDarker ? (v < threshold) : (v > threshold)
-            return hit ? Float(1) : Float(0)
-        }
-    }
-
-    private func averageBorderLuminance(samples: [PixelSample], grid: Int) -> Float {
-        var sum: Float = 0, count: Float = 0
-        for y in 0..<grid {
-            for x in 0..<grid where x < 2 || y < 2 || x >= grid - 2 || y >= grid - 2 {
-                sum += samples[y * grid + x].l; count += 1
-            }
-        }
-        return sum / max(count, 1)
-    }
-
-    private func averageCenterLuminance(samples: [PixelSample], grid: Int) -> Float {
-        let lo = grid / 3, hi = (grid * 2) / 3
-        var sum: Float = 0, count: Float = 0
-        for y in lo..<hi { for x in lo..<hi { sum += samples[y * grid + x].l; count += 1 } }
-        return sum / max(count, 1)
-    }
-
-    private func closeBinaryHoles(_ input: [Bool], grid: Int) -> [Bool] {
-        var out = input
-        for y in 1..<(grid - 1) {
-            for x in 1..<(grid - 1) where !input[y * grid + x] {
-                var neighbors = 0
-                for yy in (y - 1)...(y + 1) {
-                    for xx in (x - 1)...(x + 1) where !(xx == x && yy == y) {
-                        if input[yy * grid + xx] { neighbors += 1 }
-                    }
-                }
-                if neighbors >= 6 { out[y * grid + x] = true }
-            }
-        }
-        return out
-    }
-
-    private func keepBestSubjectIsland(_ input: [Bool], grid: Int) -> [Bool] {
-        var visited = [Bool](repeating: false, count: input.count)
-        var best: [Int] = []
-        var bestScore: Float = -1
-        let center = Float(grid - 1) / 2
-        for i in input.indices where input[i] && !visited[i] {
-            var stack = [i]
-            var comp: [Int] = []
-            visited[i] = true
-            var touchesBorder = false
-            var centerBonus: Float = 0
-            while let idx = stack.popLast() {
-                comp.append(idx)
-                let x = idx % grid, y = idx / grid
-                if x == 0 || y == 0 || x == grid - 1 || y == grid - 1 { touchesBorder = true }
-                let dx = abs(Float(x) - center) / max(center, 1)
-                let dy = abs(Float(y) - center) / max(center, 1)
-                centerBonus += max(0, 1 - (dx + dy) / 2)
-                for (nx, ny) in [(x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)] {
-                    guard nx >= 0, ny >= 0, nx < grid, ny < grid else { continue }
-                    let ni = ny * grid + nx
-                    if input[ni] && !visited[ni] {
-                        visited[ni] = true
-                        stack.append(ni)
-                    }
-                }
-            }
-            let borderPenalty: Float = touchesBorder ? 0.18 : 1.0
-            let score = (Float(comp.count) + centerBonus * 0.22) * borderPenalty
-            if score > bestScore {
-                bestScore = score
-                best = comp
-            }
-        }
-        if best.count < 8 { return input }
-        var out = [Bool](repeating: false, count: input.count)
-        for idx in best { out[idx] = true }
-        return out
-    }
-
-    private func softenBinaryMask(_ input: [Float], grid: Int) -> [Float] {
-        var out = input
-        for y in 0..<grid {
-            for x in 0..<grid {
-                var sum: Float = 0, count: Float = 0
-                for yy in max(0, y - 1)...min(grid - 1, y + 1) {
-                    for xx in max(0, x - 1)...min(grid - 1, x + 1) {
-                        sum += input[yy * grid + xx]; count += 1
-                    }
-                }
-                let avg = sum / max(count, 1)
-                out[y * grid + x] = input[y * grid + x] > 0 ? max(0.72, avg) : (avg > 0.74 ? 0.55 : 0)
-            }
-        }
-        return out
-    }
-
     private func samplePixels(cgImage: CGImage, grid: Int) throws -> [PixelSample] {
         let colorSpace = CGColorSpaceCreateDeviceRGB()
         var bytes = [UInt8](repeating: 0, count: grid * grid * 4)
-        guard let bitmap = CGContext(data: &bytes,
-                                     width: grid,
-                                     height: grid,
-                                     bitsPerComponent: 8,
-                                     bytesPerRow: grid * 4,
-                                     space: colorSpace,
-                                     bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else {
+        guard let bitmap = CGContext(data: &bytes, width: grid, height: grid, bitsPerComponent: 8, bytesPerRow: grid * 4, space: colorSpace, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else {
             throw FrontLogicError.bitmapFailed
         }
         bitmap.interpolationQuality = .high
@@ -398,9 +275,57 @@ final class ReliefMeshBuilder {
                 raw[idx] = smoothStep(edge0: threshold * 0.82, edge1: threshold * 2.05, x: score)
             }
         }
-        var smoothed = raw
-        for _ in 0..<1 { smoothed = smoothMask(smoothed, grid: grid) }
+        let smoothed = smoothMask(raw, grid: grid)
         return smoothed.map { $0 < 0.32 ? 0 : min(1, $0) }
+    }
+
+    private func makeOtsuForegroundMask(samples: [PixelSample], grid: Int) -> [Float] {
+        let luminance = samples.map { max(0, min(1, $0.l)) }
+        var hist = [Int](repeating: 0, count: 256)
+        for l in luminance { hist[max(0, min(255, Int(l * 255)))] += 1 }
+        let total = luminance.count
+        var sumAll = 0
+        for i in 0..<256 { sumAll += i * hist[i] }
+        var sumB = 0
+        var weightB = 0
+        var bestVariance: Double = -1
+        var threshold = 127
+        for i in 0..<256 {
+            weightB += hist[i]
+            if weightB == 0 { continue }
+            let weightF = total - weightB
+            if weightF == 0 { break }
+            sumB += i * hist[i]
+            let meanB = Double(sumB) / Double(weightB)
+            let meanF = Double(sumAll - sumB) / Double(weightF)
+            let variance = Double(weightB) * Double(weightF) * pow(meanB - meanF, 2)
+            if variance > bestVariance { bestVariance = variance; threshold = i }
+        }
+        let borderAverage = averageBorderLuminance(samples: samples, grid: grid)
+        let centerAverage = averageCenterLuminance(samples: samples, grid: grid)
+        let subjectIsDarker = centerAverage < borderAverage
+        return luminance.map { l in
+            let v = Int(l * 255)
+            let hit = subjectIsDarker ? (v < threshold) : (v > threshold)
+            return hit ? Float(1) : Float(0)
+        }
+    }
+
+    private func averageBorderLuminance(samples: [PixelSample], grid: Int) -> Float {
+        var sum: Float = 0, count: Float = 0
+        for y in 0..<grid {
+            for x in 0..<grid where x < 2 || y < 2 || x >= grid - 2 || y >= grid - 2 {
+                sum += samples[y * grid + x].l; count += 1
+            }
+        }
+        return sum / max(count, 1)
+    }
+
+    private func averageCenterLuminance(samples: [PixelSample], grid: Int) -> Float {
+        let lo = grid / 3, hi = (grid * 2) / 3
+        var sum: Float = 0, count: Float = 0
+        for y in lo..<hi { for x in lo..<hi { sum += samples[y * grid + x].l; count += 1 } }
+        return sum / max(count, 1)
     }
 
     private func centerWeight(x: Int, y: Int, grid: Int) -> Float {
@@ -415,7 +340,7 @@ final class ReliefMeshBuilder {
         return t * t * (3 - 2 * t)
     }
 
-    private func makeShapeAwareHeightMap(luminance: [Float], mask: [Float], grid: Int, settings: FrontLogicSettings) -> [Float] {
+    private func makeShapeAwareHeightMap(luminance: [Float], mask: [Float], puff: [Float], grid: Int, settings: FrontLogicSettings) -> [Float] {
         var lighting = luminance
         for _ in 0..<5 { lighting = smoothMask(lighting, grid: grid) }
         var heights = [Float](repeating: settings.baseThickness, count: grid * grid)
@@ -427,12 +352,13 @@ final class ReliefMeshBuilder {
                 let softLight = lighting[idx]
                 let edge = localEdge(luminance, grid: grid, x: x, y: y)
                 let localContrast = min(1, abs(l - softLight) * 3.0)
-                let darkFeature = settings.darkDetailRaised ? max(0, softLight - l) * 0.75 : 0
+                let darkFeature = settings.darkDetailRaised ? max(0, softLight - l) * 0.62 : 0
                 let brightnessDepth = settings.invertDepth ? (1 - l) : l
                 let shadowReducedDepth = brightnessDepth * (1 - settings.shadowReduction)
-                let subjectLift: Float = settings.subjectRaised ? 0.24 : 0
+                let subjectLift: Float = settings.subjectRaised ? 0.18 : 0
                 let contour = edge * settings.edgeBoost * settings.contourWeight
-                let detail = max(0, min(1, subjectLift + contour + localContrast * 0.58 + darkFeature + shadowReducedDepth * 0.28))
+                let roundPuff = puff.indices.contains(idx) ? puff[idx] * 0.62 : 0
+                let detail = max(0, min(1, subjectLift + roundPuff + contour + localContrast * 0.42 + darkFeature + shadowReducedDepth * 0.18))
                 heights[idx] = settings.baseThickness + (detail * settings.reliefStrength * subject)
             }
         }
@@ -486,26 +412,20 @@ final class ReliefMeshBuilder {
         return out
     }
 
-    private func makeFlatBackMesh(heights: [Float], mask: [Float], samples: [PixelSample], grid: Int, imageSize: CGSize) -> MeshModel {
+    private func makeFlatBackMesh(heights: [Float], samples: [PixelSample], grid: Int, imageSize: CGSize) -> MeshModel {
         var vertices: [Vertex3D] = []
         var triangles: [Triangle3D] = []
         for y in 0..<grid {
             for x in 0..<grid {
                 let s = samples[y * grid + x]
-                vertices.append(Vertex3D(x: Float(x) / Float(grid - 1) - 0.5,
-                                         y: 0.5 - Float(y) / Float(grid - 1),
-                                         z: heights[y * grid + x],
-                                         r: s.r, g: s.g, b: s.b))
+                vertices.append(Vertex3D(x: Float(x) / Float(grid - 1) - 0.5, y: 0.5 - Float(y) / Float(grid - 1), z: heights[y * grid + x], r: s.r, g: s.g, b: s.b))
             }
         }
         let bottomOffset = vertices.count
         for y in 0..<grid {
             for x in 0..<grid {
                 let s = samples[y * grid + x]
-                vertices.append(Vertex3D(x: Float(x) / Float(grid - 1) - 0.5,
-                                         y: 0.5 - Float(y) / Float(grid - 1),
-                                         z: 0,
-                                         r: s.r, g: s.g, b: s.b))
+                vertices.append(Vertex3D(x: Float(x) / Float(grid - 1) - 0.5, y: 0.5 - Float(y) / Float(grid - 1), z: 0, r: s.r, g: s.g, b: s.b))
             }
         }
         func top(_ x: Int, _ y: Int) -> Int { y * grid + x }
@@ -513,11 +433,9 @@ final class ReliefMeshBuilder {
         for y in 0..<(grid - 1) {
             for x in 0..<(grid - 1) {
                 let a = top(x, y), b = top(x + 1, y), c = top(x, y + 1), d = top(x + 1, y + 1)
-                triangles.append(Triangle3D(a: a, b: c, c: b))
-                triangles.append(Triangle3D(a: b, b: c, c: d))
+                triangles.append(Triangle3D(a: a, b: c, c: b)); triangles.append(Triangle3D(a: b, b: c, c: d))
                 let ba = bottom(x, y), bb = bottom(x + 1, y), bc = bottom(x, y + 1), bd = bottom(x + 1, y + 1)
-                triangles.append(Triangle3D(a: ba, b: bb, c: bc))
-                triangles.append(Triangle3D(a: bb, b: bd, c: bc))
+                triangles.append(Triangle3D(a: ba, b: bb, c: bc)); triangles.append(Triangle3D(a: bb, b: bd, c: bc))
             }
         }
         for x in 0..<(grid - 1) {
@@ -538,39 +456,27 @@ final class ReliefMeshBuilder {
         var bottomIndexGrid = [Int](repeating: -1, count: grid * grid)
         let threshold: Float = 0.50
 
-        func vertexSolid(_ x: Int, _ y: Int) -> Bool {
-            guard x >= 0, y >= 0, x < grid, y < grid else { return false }
-            return mask[y * grid + x] >= threshold
-        }
         func cellSolid(_ x: Int, _ y: Int) -> Bool {
             guard x >= 0, y >= 0, x < grid - 1, y < grid - 1 else { return false }
-            let a = mask[y * grid + x]
-            let b = mask[y * grid + x + 1]
-            let c = mask[(y + 1) * grid + x]
-            let d = mask[(y + 1) * grid + x + 1]
+            let a = mask[y * grid + x], b = mask[y * grid + x + 1], c = mask[(y + 1) * grid + x], d = mask[(y + 1) * grid + x + 1]
             return a >= threshold && b >= threshold && c >= threshold && d >= threshold
         }
         func point(_ x: Int, _ y: Int, _ z: Float) -> Vertex3D {
             let s = samples[y * grid + x]
-            return Vertex3D(x: Float(x) / Float(grid - 1) - 0.5,
-                            y: 0.5 - Float(y) / Float(grid - 1),
-                            z: z,
-                            r: s.r, g: s.g, b: s.b)
+            return Vertex3D(x: Float(x) / Float(grid - 1) - 0.5, y: 0.5 - Float(y) / Float(grid - 1), z: z, r: s.r, g: s.g, b: s.b)
         }
         func top(_ x: Int, _ y: Int) -> Int {
             let idx = y * grid + x
             if vertexIndexGrid[idx] >= 0 { return vertexIndexGrid[idx] }
             let index = vertices.count
-            vertices.append(point(x, y, heights[idx]))
-            vertexIndexGrid[idx] = index
+            vertices.append(point(x, y, heights[idx])); vertexIndexGrid[idx] = index
             return index
         }
         func bottom(_ x: Int, _ y: Int) -> Int {
             let idx = y * grid + x
             if bottomIndexGrid[idx] >= 0 { return bottomIndexGrid[idx] }
             let index = vertices.count
-            vertices.append(point(x, y, 0))
-            bottomIndexGrid[idx] = index
+            vertices.append(point(x, y, 0)); bottomIndexGrid[idx] = index
             return index
         }
 
@@ -579,18 +485,16 @@ final class ReliefMeshBuilder {
             for x in 0..<(grid - 1) where cellSolid(x, y) {
                 solidCells += 1
                 let a = top(x, y), b = top(x + 1, y), c = top(x, y + 1), d = top(x + 1, y + 1)
-                triangles.append(Triangle3D(a: a, b: c, c: b))
-                triangles.append(Triangle3D(a: b, b: c, c: d))
+                triangles.append(Triangle3D(a: a, b: c, c: b)); triangles.append(Triangle3D(a: b, b: c, c: d))
                 let ba = bottom(x, y), bb = bottom(x + 1, y), bc = bottom(x, y + 1), bd = bottom(x + 1, y + 1)
-                triangles.append(Triangle3D(a: ba, b: bb, c: bc))
-                triangles.append(Triangle3D(a: bb, b: bd, c: bc))
+                triangles.append(Triangle3D(a: ba, b: bb, c: bc)); triangles.append(Triangle3D(a: bb, b: bd, c: bc))
                 if !cellSolid(x, y - 1) { addWall(topA: a, topB: b, bottomA: ba, bottomB: bb, triangles: &triangles) }
                 if !cellSolid(x, y + 1) { addWall(topA: d, topB: c, bottomA: bd, bottomB: bc, triangles: &triangles) }
                 if !cellSolid(x - 1, y) { addWall(topA: c, topB: a, bottomA: bc, bottomB: ba, triangles: &triangles) }
                 if !cellSolid(x + 1, y) { addWall(topA: b, topB: d, bottomA: bb, bottomB: bd, triangles: &triangles) }
             }
         }
-        if solidCells < 12 || solidCells > Int(Double((grid - 1) * (grid - 1)) * 0.70) { return .empty }
+        if solidCells < 12 || solidCells > Int(Double((grid - 1) * (grid - 1)) * 0.74) { return .empty }
         return MeshModel(vertices: vertices, triangles: triangles, sourceImageSize: imageSize)
     }
 
@@ -665,10 +569,7 @@ struct MeshModel {
             indices.append(Int32(t.a)); indices.append(Int32(t.b)); indices.append(Int32(t.c))
         }
         let data = Data(bytes: indices, count: indices.count * MemoryLayout<Int32>.size)
-        let element = SCNGeometryElement(data: data,
-                                         primitiveType: .triangles,
-                                         primitiveCount: triangles.count,
-                                         bytesPerIndex: MemoryLayout<Int32>.size)
+        let element = SCNGeometryElement(data: data, primitiveType: .triangles, primitiveCount: triangles.count, bytesPerIndex: MemoryLayout<Int32>.size)
         let geometry = SCNGeometry(sources: [source], elements: [element])
         let mat = SCNMaterial()
         mat.diffuse.contents = UIColor.systemCyan
