@@ -152,7 +152,7 @@ struct LiDARARViewContainer: UIViewRepresentable {
         }
     }
 
-    final class Coordinator: NSObject {
+    final class Coordinator: NSObject, ARSessionDelegate {
         var parent: LiDARARViewContainer
         var lastExportToken = 0
         private var didStart = false
