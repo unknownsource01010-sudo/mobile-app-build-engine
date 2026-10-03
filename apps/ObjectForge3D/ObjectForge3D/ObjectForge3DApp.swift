@@ -4,7 +4,7 @@ import SwiftUI
 struct ObjectForge3DApp: App {
     var body: some Scene {
         WindowGroup {
-            ObjectForgeMainView()
+            ObjectForgeRootView()
         }
     }
 }
