@@ -53,7 +53,7 @@ struct DimensionEditPanel: View {
 }
 
 struct FrontLogicSettings: Equatable {
-    var gridSize: Int = 76
+    var gridSize: Int = 88
     var reliefStrength: Float = 12
     var baseThickness: Float = 3
     var smoothingPasses: Int = 2
@@ -194,8 +194,45 @@ final class ReliefMeshBuilder {
         }
 
         var closed = ObjectForgeMaskPuffMath.closeInteriorHoles(binary.map { $0 ? Float(1) : Float(0) }, grid: grid, iterations: 4)
+        closed = carveWeakOuterMask(closed, confidence: chosen, grid: grid)
         closed = ObjectForgeMaskPuffMath.gaussian3x3(closed, grid: grid)
-        return closed.map { $0 < 0.44 ? 0 : min(1, $0) }
+        return closed.map { $0 < 0.48 ? 0 : min(1, $0) }
+    }
+
+    private func carveWeakOuterMask(_ filled: [Float], confidence: [Float], grid: Int) -> [Float] {
+        guard filled.count == grid * grid, grid > 4 else { return filled }
+        let conf = confidence.count == filled.count ? confidence : filled
+        var binary = filled.map { $0 > 0.43 }
+
+        for _ in 0..<4 {
+            var next = binary
+            for y in 1..<(grid - 1) {
+                for x in 1..<(grid - 1) {
+                    let idx = y * grid + x
+                    guard binary[idx] else { continue }
+                    var outsideNeighbors = 0
+                    var solidNeighbors = 0
+                    for yy in (y - 1)...(y + 1) {
+                        for xx in (x - 1)...(x + 1) where !(xx == x && yy == y) {
+                            if binary[yy * grid + xx] { solidNeighbors += 1 } else { outsideNeighbors += 1 }
+                        }
+                    }
+                    let boundary = outsideNeighbors >= 2
+                    let nearFrame = x < 5 || y < 5 || x >= grid - 5 || y >= grid - 5
+                    let center = centerWeight(x: x, y: y, grid: grid)
+                    let c = conf[idx]
+                    let weakOuterShelf = boundary && c < 0.52 && center < 0.62
+                    let isolatedBlock = boundary && solidNeighbors <= 3 && c < 0.68
+                    let frameLeak = nearFrame && c < 0.75
+                    if weakOuterShelf || isolatedBlock || frameLeak { next[idx] = false }
+                }
+            }
+            binary = ObjectForgeMaskPuffMath.keepLargestCenteredIsland(next, grid: grid)
+        }
+
+        var out = binary.map { $0 ? Float(1) : Float(0) }
+        out = smoothMask(out, grid: grid)
+        return out.map { $0 < 0.36 ? 0 : min(1, $0) }
     }
 
     private func usefulCoverage(_ mask: [Float]) -> Bool {
@@ -458,8 +495,10 @@ final class ReliefMeshBuilder {
 
         func cellSolid(_ x: Int, _ y: Int) -> Bool {
             guard x >= 0, y >= 0, x < grid - 1, y < grid - 1 else { return false }
-            let a = mask[y * grid + x], b = mask[y * grid + x + 1], c = mask[(y + 1) * grid + x], d = mask[(y + 1) * grid + x + 1]
-            return a >= threshold && b >= threshold && c >= threshold && d >= threshold
+            let values = [mask[y * grid + x], mask[y * grid + x + 1], mask[(y + 1) * grid + x], mask[(y + 1) * grid + x + 1]]
+            let strong = values.filter { $0 >= threshold }.count
+            let average = values.reduce(Float(0), +) / 4
+            return strong >= 3 && average >= 0.52
         }
         func point(_ x: Int, _ y: Int, _ z: Float) -> Vertex3D {
             let s = samples[y * grid + x]
