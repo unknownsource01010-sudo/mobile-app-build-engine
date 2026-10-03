@@ -1,14 +1,14 @@
 import Foundation
 
-/// Offline-safe math helpers for the next ObjectForge single-photo pass.
+/// Offline-safe math helpers for ObjectForge single-photo reconstruction.
 ///
-/// This keeps the risky mask/shape math isolated from the UI so the app can
-/// compile while we wire the pieces into the active ReliefMeshBuilder in smaller
-/// verified shots.
+/// These helpers are deliberately small and dependency-free so they run inside
+/// the iPhone build without OpenCV. They provide the Swift equivalents of the
+/// old Python Math3D notes: chroma masking, solid island cleanup, distance puff
+/// depth, and anti-ridge smoothing.
 enum ObjectForgeMaskPuffMath {
-    /// Build a saturation/chroma mask from RGB samples.  This is the Swift/iPhone
-    /// equivalent of the OpenCV HSV saturation trick from the old Math3D scraps:
-    /// shadows tend to be low-chroma; real subject color tends to stay higher.
+    /// Build a saturation/chroma mask from RGB samples. Shadows tend to be low
+    /// chroma; real subject color usually stays higher.
     static func saturationMask(red: [Float], green: [Float], blue: [Float], threshold: Float = 0.14) -> [Float] {
         let count = min(red.count, min(green.count, blue.count))
         guard count > 0 else { return [] }
@@ -20,34 +20,40 @@ enum ObjectForgeMaskPuffMath {
             let maxC = max(r, max(g, b))
             let minC = min(r, min(g, b))
             let sat = maxC <= 0.0001 ? 0 : (maxC - minC) / maxC
-            out[i] = smoothStep(edge0: threshold * 0.65, edge1: threshold * 1.85, x: sat)
+            out[i] = smoothStep(edge0: threshold * 0.55, edge1: threshold * 1.72, x: sat)
         }
         return out
     }
 
-    /// Stronger close/fill pass for the current "dog stencil has holes" problem.
-    /// It fills small cavities but does not let the mask grow to a full rectangle.
-    static func closeInteriorHoles(_ mask: [Float], grid: Int, iterations: Int = 3) -> [Float] {
+    /// Strong close/fill pass for the current "solid subject but holes remain"
+    /// problem. This intentionally fills interior cavities and bridges one-cell
+    /// cracks while still rejecting border-connected background so the old square
+    /// slab failure does not come back.
+    static func closeInteriorHoles(_ mask: [Float], grid: Int, iterations: Int = 4) -> [Float] {
         guard grid > 2, mask.count == grid * grid else { return mask }
-        var binary = mask.map { $0 > 0.45 }
-        for _ in 0..<max(1, iterations) {
-            var next = binary
-            for y in 1..<(grid - 1) {
-                for x in 1..<(grid - 1) {
-                    let idx = y * grid + x
-                    var neighbors = 0
-                    for yy in (y - 1)...(y + 1) {
-                        for xx in (x - 1)...(x + 1) where !(xx == x && yy == y) {
-                            if binary[yy * grid + xx] { neighbors += 1 }
-                        }
-                    }
-                    if !binary[idx] && neighbors >= 5 { next[idx] = true }
-                    if binary[idx] && neighbors <= 1 { next[idx] = false }
-                }
-            }
-            binary = next
+        var binary = mask.map { $0 > 0.38 }
+        let passes = max(3, iterations + 2)
+
+        // Morphological close: grow subject into tiny cracks, then lightly prune.
+        for _ in 0..<passes {
+            binary = growIntoSmallGaps(binary, grid: grid, neighborNeeded: 3)
         }
-        return keepLargestCenteredIsland(binary, grid: grid).map { $0 ? Float(1) : Float(0) }
+        binary = fillEnclosedHoles(binary, grid: grid)
+        binary = keepLargestCenteredIsland(binary, grid: grid)
+        for _ in 0..<2 {
+            binary = pruneTinySpikes(binary, grid: grid, neighborNeeded: 2)
+        }
+        binary = fillEnclosedHoles(binary, grid: grid)
+        binary = keepLargestCenteredIsland(binary, grid: grid)
+
+        // Return a soft mask: solid interior gets 1.0, immediate border gets
+        // a shoulder so later 0.50 cell tests do not punch random holes.
+        var out = binary.map { $0 ? Float(1) : Float(0) }
+        out = gaussian3x3(out, grid: grid)
+        return out.map { value in
+            if value >= 0.30 { return min(1, max(0.72, value)) }
+            return 0
+        }
     }
 
     /// Keep the main subject island and discard speckles/background islands.
@@ -83,8 +89,8 @@ enum ObjectForgeMaskPuffMath {
                 }
             }
 
-            let framePenalty: Float = touchesFrame ? 0.15 : 1.0
-            let score = (Float(component.count) + centerScore * 0.25) * framePenalty
+            let framePenalty: Float = touchesFrame ? 0.12 : 1.0
+            let score = (Float(component.count) + centerScore * 0.30) * framePenalty
             if score > bestScore {
                 bestScore = score
                 best = component
@@ -97,9 +103,8 @@ enum ObjectForgeMaskPuffMath {
         return out
     }
 
-    /// Approximate distance-transform puff depth.  A cell near the silhouette is
-    /// shallow; interior cells rise smoothly toward the center. This is the key
-    /// "rounded relief" ingredient from the Math3D snippets.
+    /// Approximate distance-transform puff depth. A cell near the silhouette is
+    /// shallow; interior cells rise smoothly toward the center.
     static func distancePuff(mask: [Float], grid: Int) -> [Float] {
         guard grid > 1, mask.count == grid * grid else { return mask }
         let inf = grid * grid
@@ -131,7 +136,7 @@ enum ObjectForgeMaskPuffMath {
             let normalized = Float(dist[i]) / Float(maxDist)
             out[i] = smoothStep(edge0: 0.0, edge1: 1.0, x: normalized)
         }
-        return gaussian3x3(out, grid: grid)
+        return gaussian3x3(gaussian3x3(out, grid: grid), grid: grid)
     }
 
     /// Tiny Gaussian-style blur to remove stair-step ridges without destroying silhouette.
@@ -154,6 +159,63 @@ enum ObjectForgeMaskPuffMath {
             }
         }
         return out
+    }
+
+    private static func growIntoSmallGaps(_ input: [Bool], grid: Int, neighborNeeded: Int) -> [Bool] {
+        var out = input
+        for y in 1..<(grid - 1) {
+            for x in 1..<(grid - 1) where !input[y * grid + x] {
+                let count = neighborCount(input, grid: grid, x: x, y: y)
+                if count >= neighborNeeded { out[y * grid + x] = true }
+            }
+        }
+        return out
+    }
+
+    private static func pruneTinySpikes(_ input: [Bool], grid: Int, neighborNeeded: Int) -> [Bool] {
+        var out = input
+        for y in 1..<(grid - 1) {
+            for x in 1..<(grid - 1) where input[y * grid + x] {
+                let count = neighborCount(input, grid: grid, x: x, y: y)
+                if count < neighborNeeded { out[y * grid + x] = false }
+            }
+        }
+        return out
+    }
+
+    private static func fillEnclosedHoles(_ input: [Bool], grid: Int) -> [Bool] {
+        guard input.count == grid * grid else { return input }
+        var outside = [Bool](repeating: false, count: input.count)
+        var stack: [Int] = []
+        func push(_ x: Int, _ y: Int) {
+            guard x >= 0, y >= 0, x < grid, y < grid else { return }
+            let idx = y * grid + x
+            if !input[idx] && !outside[idx] {
+                outside[idx] = true
+                stack.append(idx)
+            }
+        }
+        for i in 0..<grid {
+            push(i, 0); push(i, grid - 1); push(0, i); push(grid - 1, i)
+        }
+        while let idx = stack.popLast() {
+            let x = idx % grid
+            let y = idx / grid
+            push(x + 1, y); push(x - 1, y); push(x, y + 1); push(x, y - 1)
+        }
+        var out = input
+        for i in out.indices where !out[i] && !outside[i] { out[i] = true }
+        return out
+    }
+
+    private static func neighborCount(_ values: [Bool], grid: Int, x: Int, y: Int) -> Int {
+        var count = 0
+        for yy in max(0, y - 1)...min(grid - 1, y + 1) {
+            for xx in max(0, x - 1)...min(grid - 1, x + 1) where !(xx == x && yy == y) {
+                if values[yy * grid + xx] { count += 1 }
+            }
+        }
+        return count
     }
 
     private static func smoothStep(edge0: Float, edge1: Float, x: Float) -> Float {
