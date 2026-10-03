@@ -27,33 +27,33 @@ enum ObjectForgeMaskPuffMath {
 
     /// Solid-fill plus shape-carve pass.
     ///
-    /// The prior hole-killer proved the interior fill works, but the screenshot
-    /// showed the mask can become too rectangular. This keeps the fill, then
-    /// carves blocky shelf/shoulder growth from the outside before softening the
-    /// silhouette for the mesh cutter.
+    /// The first hole-killer filled the dog, but also kept rectangular shelf
+    /// chunks from the photo. This version fills only credible enclosed holes,
+    /// then trims weak exterior shelves more aggressively while keeping the main
+    /// subject island solid.
     static func closeInteriorHoles(_ mask: [Float], grid: Int, iterations: Int = 4) -> [Float] {
         guard grid > 2, mask.count == grid * grid else { return mask }
-        var binary = mask.map { $0 > 0.38 }
-        let passes = max(3, iterations + 2)
+        var binary = mask.map { $0 > 0.42 }
+        let passes = max(1, min(2, iterations / 2))
 
-        // 1) Fill the subject so we do not go back to the Swiss-cheese dog.
+        // 1) Bridge tiny cracks, not whole shelves. The old neighbor threshold
+        // was intentionally strong for hole killing; this one is conservative.
         for _ in 0..<passes {
-            binary = growIntoSmallGaps(binary, grid: grid, neighborNeeded: 3)
+            binary = growIntoSmallGaps(binary, grid: grid, neighborNeeded: 5)
         }
         binary = fillEnclosedHoles(binary, grid: grid)
         binary = keepLargestCenteredIsland(binary, grid: grid)
 
         // 2) Carve the new failure mode: chunky rectangular shelves attached to
-        // the main island. This is deliberately contour-only so the filled core
-        // stays intact.
-        for _ in 0..<2 {
+        // the main island. Multiple light passes beat one brutal crop.
+        for _ in 0..<4 {
             binary = carveWeakOuterShelves(binary, grid: grid)
-            binary = pruneTinySpikes(binary, grid: grid, neighborNeeded: 2)
+            binary = pruneTinySpikes(binary, grid: grid, neighborNeeded: 3)
             binary = keepLargestCenteredIsland(binary, grid: grid)
         }
 
-        // 3) Smooth jagged contour, then refill any tiny interior pinholes caused
-        // by trimming. One final island pass keeps the square slab from returning.
+        // 3) Smooth jagged contour, then refill only enclosed pinholes caused by
+        // trimming. One final island pass keeps square slab mode from returning.
         binary = majoritySmoothSilhouette(binary, grid: grid)
         binary = fillEnclosedHoles(binary, grid: grid)
         binary = keepLargestCenteredIsland(binary, grid: grid)
@@ -61,7 +61,7 @@ enum ObjectForgeMaskPuffMath {
         var out = binary.map { $0 ? Float(1) : Float(0) }
         out = gaussian3x3(out, grid: grid)
         return out.map { value in
-            if value >= 0.34 { return min(1, max(0.68, value)) }
+            if value >= 0.40 { return min(1, max(0.64, value)) }
             return 0
         }
     }
@@ -204,15 +204,16 @@ enum ObjectForgeMaskPuffMath {
             guard let bounds = rowBounds[y] else { continue }
             let rowWidth = bounds.right - bounds.left + 1
             let verticalPosition = Float(y - minY) / Float(max(height - 1, 1))
-            let rowIsShelf = rowWidth > Int(Float(max(medianWidth, 1)) * 1.28) && (verticalPosition < 0.42 || verticalPosition > 0.72)
+            let topOrBottom = verticalPosition < 0.48 || verticalPosition > 0.70
+            let rowIsShelf = rowWidth > Int(Float(max(medianWidth, 1)) * 1.12) && topOrBottom
             guard rowIsShelf else { continue }
 
             // Trim only the outer overhang of very wide rows. Use center of the
             // subject island so legs/head attached near center survive.
-            let allowedHalf = max(Float(medianWidth) * 0.62, Float(rowWidth) * 0.38)
+            let allowedHalf = max(Float(medianWidth) * 0.54, Float(rowWidth) * 0.32)
             for x in bounds.left...bounds.right where input[y * grid + x] {
                 let distanceFromCenter = abs(Float(x) - centerX)
-                if distanceFromCenter > allowedHalf && contourDistance(input, grid: grid, x: x, y: y) <= 2 {
+                if distanceFromCenter > allowedHalf && contourDistance(input, grid: grid, x: x, y: y) <= 3 {
                     out[y * grid + x] = false
                 }
             }
@@ -222,8 +223,8 @@ enum ObjectForgeMaskPuffMath {
         for y in 1..<(grid - 1) {
             for x in 1..<(grid - 1) where out[y * grid + x] {
                 let n = neighborCount(out, grid: grid, x: x, y: y)
-                let edge = contourDistance(out, grid: grid, x: x, y: y) <= 1
-                if edge && n <= 3 { out[y * grid + x] = false }
+                let edge = contourDistance(out, grid: grid, x: x, y: y) <= 2
+                if edge && n <= 4 { out[y * grid + x] = false }
             }
         }
         return out
@@ -235,8 +236,8 @@ enum ObjectForgeMaskPuffMath {
             for x in 1..<(grid - 1) {
                 let idx = y * grid + x
                 let count = neighborCount(input, grid: grid, x: x, y: y)
-                if input[idx] && count <= 2 { out[idx] = false }
-                if !input[idx] && count >= 6 { out[idx] = true }
+                if input[idx] && count <= 3 { out[idx] = false }
+                if !input[idx] && count >= 7 { out[idx] = true }
             }
         }
         return out
