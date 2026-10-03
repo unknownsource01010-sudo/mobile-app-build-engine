@@ -37,15 +37,16 @@ struct ObjectForgeMainView: View {
 
                     if !displayMesh.isEmpty {
                         FixedSceneKitPreview(mesh: displayMesh)
-                            .frame(height: 390)
+                            .frame(height: 430)
                             .clipShape(RoundedRectangle(cornerRadius: 18))
                             .overlay(alignment: .topLeading) { confidenceLegend.padding(10) }
                             .overlay(alignment: .topTrailing) {
-                                Text("PREVIEW FIX 1")
+                                Text(settings.removeBackground ? "BG REMOVE" : "FULL PHOTO")
                                     .font(.caption2.weight(.black))
-                                    .padding(.horizontal, 9)
-                                    .padding(.vertical, 6)
-                                    .background(.thinMaterial)
+                                    .foregroundStyle(.black)
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 5)
+                                    .background(settings.removeBackground ? Color.green : Color.yellow)
                                     .clipShape(Capsule())
                                     .padding(10)
                             }
@@ -57,7 +58,7 @@ struct ObjectForgeMainView: View {
                                     .clipShape(Capsule())
                                     .padding(10)
                             }
-                            .id(displayMesh.vertices.count + displayMesh.triangles.count + Int(widthMM) + Int(heightMM) + Int(depthMM))
+                            .id(displayMesh.vertices.count + displayMesh.triangles.count + Int(widthMM) + Int(heightMM) + Int(depthMM) + (settings.removeBackground ? 11 : 0))
 
                         MeshStatsStrip(mesh: displayMesh)
 
@@ -94,7 +95,7 @@ struct ObjectForgeMainView: View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Photo → printable 3D part")
                 .font(.title2.bold())
-            Text("FrontLogic v1 turns one photo into a flat-back relief mesh, then lets you resize and export STL for repair parts.")
+            Text("FrontLogic v1 turns one photo into a flat-back relief mesh with background removal, depth flip control, exact resize, and STL export.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
         }
@@ -123,7 +124,17 @@ struct ObjectForgeMainView: View {
                 sliderRow("Relief Strength", value: Binding(get: { Double(settings.reliefStrength) }, set: { settings.reliefStrength = Float($0) }), range: 1...60, suffix: "mm")
                 sliderRow("Base Thickness", value: Binding(get: { Double(settings.baseThickness) }, set: { settings.baseThickness = Float($0) }), range: 1...15, suffix: "mm")
                 sliderRow("Edge Boost", value: Binding(get: { Double(settings.edgeBoost) }, set: { settings.edgeBoost = Float($0) }), range: 0...1.5, suffix: "")
+
+                Toggle("Remove background relief", isOn: Binding(get: { settings.removeBackground }, set: { settings.removeBackground = $0 }))
+                if settings.removeBackground {
+                    sliderRow("Background Cut", value: Binding(get: { Double(settings.backgroundThreshold) }, set: { settings.backgroundThreshold = Float($0) }), range: 0.03...0.45, suffix: "")
+                }
+                Toggle("Subject raised", isOn: Binding(get: { settings.subjectRaised }, set: { settings.subjectRaised = $0 }))
                 Toggle("Invert depth", isOn: Binding(get: { settings.invertDepth }, set: { settings.invertDepth = $0 }))
+
+                Text("If the model looks inside-out or backward, flip Invert depth. If the background is becoming the part, keep Remove background relief on and adjust Background Cut.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
         }
         .padding()
@@ -139,11 +150,8 @@ struct ObjectForgeMainView: View {
             Text("3D preview appears here after generation")
                 .font(.caption)
                 .foregroundStyle(.secondary)
-            Text("Preview Fix 1 will auto-center, brighten, and wireframe the model.")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
         }
-        .frame(maxWidth: .infinity, minHeight: 230)
+        .frame(maxWidth: .infinity, minHeight: 210)
         .background(Color(uiColor: .secondarySystemBackground))
         .clipShape(RoundedRectangle(cornerRadius: 18))
     }
@@ -153,7 +161,7 @@ struct ObjectForgeMainView: View {
             HStack {
                 Text(label).font(.caption.weight(.semibold))
                 Spacer()
-                Text("\(value.wrappedValue, specifier: "%.1f") \(suffix)")
+                Text("\(value.wrappedValue, specifier: "%.2f") \(suffix)")
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
             }
@@ -163,9 +171,9 @@ struct ObjectForgeMainView: View {
 
     private var confidenceLegend: some View {
         HStack(spacing: 8) {
-            legendDot(.green, "visible")
+            legendDot(.green, "subject")
             legendDot(.yellow, "inferred")
-            legendDot(.red, "low confidence")
+            legendDot(.red, "background flat")
         }
         .font(.caption2.weight(.semibold))
         .padding(8)
@@ -231,7 +239,7 @@ struct ObjectForgeMainView: View {
     private func buildMesh() {
         guard let selectedImage else { return }
         isWorking = true
-        status = "Generating relief mesh..."
+        status = settings.removeBackground ? "Generating subject relief with background removal..." : "Generating full-photo relief mesh..."
         let inputImage = selectedImage
         let inputSettings = settings
         let targetWidth = widthMM
@@ -245,7 +253,8 @@ struct ObjectForgeMainView: View {
                 DispatchQueue.main.async {
                     self.baseMesh = mesh
                     self.displayMesh = scaled
-                    self.status = "Preview Fix 1: generated \(scaled.vertices.count) vertices / \(scaled.triangles.count) triangles."
+                    let mode = inputSettings.removeBackground ? "background removed" : "full photo"
+                    self.status = "Generated \(scaled.vertices.count) vertices and \(scaled.triangles.count) triangles — \(mode)."
                     self.isWorking = false
                 }
             } catch {
