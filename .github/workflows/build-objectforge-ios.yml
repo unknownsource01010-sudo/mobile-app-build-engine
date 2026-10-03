@@ -1,0 +1,62 @@
+name: Build ObjectForge 3D Unsigned IPA
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main, master, objectforge3d-v1 ]
+    paths:
+      - "apps/ObjectForge3D/**"
+      - ".github/workflows/build-objectforge-ios.yml"
+
+jobs:
+  build-ios:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install XcodeGen
+        run: |
+          brew update
+          brew install xcodegen
+
+      - name: Generate Xcode project
+        working-directory: apps/ObjectForge3D
+        run: xcodegen generate
+
+      - name: Build app unsigned
+        working-directory: apps/ObjectForge3D
+        run: |
+          set -euxo pipefail
+          xcodebuild \
+            -project ObjectForge3D.xcodeproj \
+            -scheme ObjectForge3D \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build
+
+      - name: Package unsigned IPA
+        working-directory: apps/ObjectForge3D
+        run: |
+          set -euxo pipefail
+          APP_PATH="$(find build -name 'ObjectForge3D.app' -type d | head -n 1)"
+          test -n "$APP_PATH"
+          rm -rf Payload ObjectForge3D-unsigned.ipa
+          mkdir Payload
+          cp -R "$APP_PATH" Payload/
+          zip -r ObjectForge3D-unsigned.ipa Payload
+          shasum -a 256 ObjectForge3D-unsigned.ipa > ObjectForge3D-unsigned.ipa.sha256
+
+      - name: Upload unsigned IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ObjectForge3D-unsigned-ipa
+          path: |
+            apps/ObjectForge3D/ObjectForge3D-unsigned.ipa
+            apps/ObjectForge3D/ObjectForge3D-unsigned.ipa.sha256
+          if-no-files-found: error
