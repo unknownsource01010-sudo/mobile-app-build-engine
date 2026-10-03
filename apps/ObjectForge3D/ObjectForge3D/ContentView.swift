@@ -51,15 +51,19 @@ struct DimensionEditPanel: View {
 }
 
 struct FrontLogicSettings: Equatable {
-    var gridSize: Int = 72
+    var gridSize: Int = 76
     var reliefStrength: Float = 12
     var baseThickness: Float = 3
     var smoothingPasses: Int = 2
     var invertDepth: Bool = false
-    var edgeBoost: Float = 0.35
+    var edgeBoost: Float = 0.65
     var removeBackground: Bool = true
     var backgroundThreshold: Float = 0.16
     var subjectRaised: Bool = true
+    var subjectCutout: Bool = true
+    var darkDetailRaised: Bool = true
+    var shadowReduction: Float = 0.72
+    var contourWeight: Float = 0.70
 
     mutating func clamp() {
         gridSize = max(16, min(140, gridSize))
@@ -68,6 +72,8 @@ struct FrontLogicSettings: Equatable {
         smoothingPasses = max(0, min(8, smoothingPasses))
         edgeBoost = max(0, min(2, edgeBoost))
         backgroundThreshold = max(0.03, min(0.45, backgroundThreshold))
+        shadowReduction = max(0, min(1, shadowReduction))
+        contourWeight = max(0, min(1.5, contourWeight))
     }
 }
 
@@ -80,8 +86,12 @@ final class ReliefMeshBuilder {
         let samples = try samplePixels(cgImage: cgImage, grid: grid)
         let luminance = samples.map { $0.l }
         let mask = settings.removeBackground ? makeForegroundMask(samples: samples, grid: grid, threshold: settings.backgroundThreshold) : [Float](repeating: 1, count: grid * grid)
-        var heights = makeHeightMap(luminance: luminance, mask: mask, grid: grid, settings: settings)
+        var heights = makeShapeAwareHeightMap(luminance: luminance, mask: mask, grid: grid, settings: settings)
         for _ in 0..<settings.smoothingPasses { heights = smooth(heights, grid: grid, mask: mask) }
+        if settings.subjectCutout && settings.removeBackground {
+            let cutout = makeSubjectCutoutMesh(heights: heights, mask: mask, grid: grid, imageSize: image.size)
+            if !cutout.isEmpty { return cutout }
+        }
         return makeFlatBackMesh(heights: heights, mask: mask, grid: grid, imageSize: image.size)
     }
 
@@ -116,6 +126,7 @@ final class ReliefMeshBuilder {
     }
 
     private func makeForegroundMask(samples: [PixelSample], grid: Int, threshold: Float) -> [Float] {
+        let luminance = samples.map { $0.l }
         var br: Float = 0, bg: Float = 0, bb: Float = 0, bl: Float = 0, count: Float = 0
         for y in 0..<grid {
             for x in 0..<grid where x == 0 || y == 0 || x == grid - 1 || y == grid - 1 {
@@ -132,10 +143,10 @@ final class ReliefMeshBuilder {
                 let p = samples[idx]
                 let colorDistance = sqrt((p.r - br) * (p.r - br) + (p.g - bg) * (p.g - bg) + (p.b - bb) * (p.b - bb))
                 let lumDistance = abs(p.l - bl)
-                let edge = localEdge(samples.map { $0.l }, grid: grid, x: x, y: y)
-                let centerBias = centerWeight(x: x, y: y, grid: grid) * 0.10
-                let score = colorDistance * 0.72 + lumDistance * 0.45 + edge * 0.55 + centerBias
-                raw[idx] = smoothStep(edge0: threshold * 0.55, edge1: threshold * 1.55, x: score)
+                let edge = localEdge(luminance, grid: grid, x: x, y: y)
+                let centerBias = centerWeight(x: x, y: y, grid: grid) * 0.12
+                let score = colorDistance * 0.78 + lumDistance * 0.34 + edge * 0.70 + centerBias
+                raw[idx] = smoothStep(edge0: threshold * 0.52, edge1: threshold * 1.48, x: score)
             }
         }
         var smoothed = raw
@@ -155,17 +166,24 @@ final class ReliefMeshBuilder {
         return t * t * (3 - 2 * t)
     }
 
-    private func makeHeightMap(luminance: [Float], mask: [Float], grid: Int, settings: FrontLogicSettings) -> [Float] {
+    private func makeShapeAwareHeightMap(luminance: [Float], mask: [Float], grid: Int, settings: FrontLogicSettings) -> [Float] {
+        var lighting = luminance
+        for _ in 0..<5 { lighting = smoothMask(lighting, grid: grid) }
         var heights = [Float](repeating: settings.baseThickness, count: grid * grid)
         for y in 0..<grid {
             for x in 0..<grid {
                 let idx = y * grid + x
                 let subject = max(0, min(1, mask[idx]))
                 let l = luminance[idx]
-                let depthSignal = settings.invertDepth ? (1 - l) : l
+                let softLight = lighting[idx]
                 let edge = localEdge(luminance, grid: grid, x: x, y: y)
-                let subjectLift: Float = settings.subjectRaised ? 0.26 : 0
-                let detail = max(0, min(1, depthSignal * 0.72 + edge * settings.edgeBoost + subjectLift))
+                let localContrast = min(1, abs(l - softLight) * 3.0)
+                let darkFeature = settings.darkDetailRaised ? max(0, softLight - l) * 0.75 : 0
+                let brightnessDepth = settings.invertDepth ? (1 - l) : l
+                let shadowReducedDepth = brightnessDepth * (1 - settings.shadowReduction)
+                let subjectLift: Float = settings.subjectRaised ? 0.24 : 0
+                let contour = edge * settings.edgeBoost * settings.contourWeight
+                let detail = max(0, min(1, subjectLift + contour + localContrast * 0.58 + darkFeature + shadowReducedDepth * 0.28))
                 heights[idx] = settings.baseThickness + (detail * settings.reliefStrength * subject)
             }
         }
@@ -257,6 +275,64 @@ final class ReliefMeshBuilder {
             addWall(topA: top(0, y + 1), topB: top(0, y), bottomA: bottom(0, y + 1), bottomB: bottom(0, y), triangles: &triangles)
             addWall(topA: top(grid - 1, y), topB: top(grid - 1, y + 1), bottomA: bottom(grid - 1, y), bottomB: bottom(grid - 1, y + 1), triangles: &triangles)
         }
+        return MeshModel(vertices: vertices, triangles: triangles, sourceImageSize: imageSize)
+    }
+
+    private func makeSubjectCutoutMesh(heights: [Float], mask: [Float], grid: Int, imageSize: CGSize) -> MeshModel {
+        var vertices: [Vertex3D] = []
+        var triangles: [Triangle3D] = []
+        var topCache: [String: Int] = [:]
+        var bottomCache: [String: Int] = [:]
+        let threshold: Float = 0.24
+
+        func vertexKey(_ x: Int, _ y: Int) -> String { "\(x),\(y)" }
+        func point(_ x: Int, _ y: Int, _ z: Float) -> Vertex3D {
+            Vertex3D(x: Float(x) / Float(grid - 1) - 0.5,
+                     y: 0.5 - Float(y) / Float(grid - 1),
+                     z: z)
+        }
+        func top(_ x: Int, _ y: Int) -> Int {
+            let key = vertexKey(x, y)
+            if let cached = topCache[key] { return cached }
+            let index = vertices.count
+            vertices.append(point(x, y, heights[y * grid + x]))
+            topCache[key] = index
+            return index
+        }
+        func bottom(_ x: Int, _ y: Int) -> Int {
+            let key = vertexKey(x, y)
+            if let cached = bottomCache[key] { return cached }
+            let index = vertices.count
+            vertices.append(point(x, y, 0))
+            bottomCache[key] = index
+            return index
+        }
+        func cellSolid(_ x: Int, _ y: Int) -> Bool {
+            guard x >= 0, y >= 0, x < grid - 1, y < grid - 1 else { return false }
+            let a = mask[y * grid + x]
+            let b = mask[y * grid + x + 1]
+            let c = mask[(y + 1) * grid + x]
+            let d = mask[(y + 1) * grid + x + 1]
+            return (a + b + c + d) / 4 > threshold || max(max(a, b), max(c, d)) > 0.55
+        }
+
+        var solidCells = 0
+        for y in 0..<(grid - 1) {
+            for x in 0..<(grid - 1) where cellSolid(x, y) {
+                solidCells += 1
+                let a = top(x, y), b = top(x + 1, y), c = top(x, y + 1), d = top(x + 1, y + 1)
+                triangles.append(Triangle3D(a: a, b: c, c: b))
+                triangles.append(Triangle3D(a: b, b: c, c: d))
+                let ba = bottom(x, y), bb = bottom(x + 1, y), bc = bottom(x, y + 1), bd = bottom(x + 1, y + 1)
+                triangles.append(Triangle3D(a: ba, b: bb, c: bc))
+                triangles.append(Triangle3D(a: bb, b: bd, c: bc))
+                if !cellSolid(x, y - 1) { addWall(topA: a, topB: b, bottomA: ba, bottomB: bb, triangles: &triangles) }
+                if !cellSolid(x, y + 1) { addWall(topA: d, topB: c, bottomA: bd, bottomB: bc, triangles: &triangles) }
+                if !cellSolid(x - 1, y) { addWall(topA: c, topB: a, bottomA: bc, bottomB: ba, triangles: &triangles) }
+                if !cellSolid(x + 1, y) { addWall(topA: b, topB: d, bottomA: bb, bottomB: bd, triangles: &triangles) }
+            }
+        }
+        if solidCells < 12 { return .empty }
         return MeshModel(vertices: vertices, triangles: triangles, sourceImageSize: imageSize)
     }
 
