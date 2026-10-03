@@ -1,6 +1,8 @@
 import SwiftUI
 import SceneKit
 import UIKit
+import Vision
+import CoreImage
 
 struct DimensionEditPanel: View {
     @Binding var widthMM: Double
@@ -64,6 +66,7 @@ struct FrontLogicSettings: Equatable {
     var darkDetailRaised: Bool = true
     var shadowReduction: Float = 0.72
     var contourWeight: Float = 0.70
+    var useVisionForegroundMask: Bool = true
 
     mutating func clamp() {
         gridSize = max(16, min(140, gridSize))
@@ -85,7 +88,19 @@ final class ReliefMeshBuilder {
         let grid = settings.gridSize
         let samples = try samplePixels(cgImage: cgImage, grid: grid)
         let luminance = samples.map { $0.l }
-        let mask = settings.removeBackground ? makeForegroundMask(samples: samples, grid: grid, threshold: settings.backgroundThreshold) : [Float](repeating: 1, count: grid * grid)
+
+        var mask = [Float](repeating: 1, count: grid * grid)
+        if settings.removeBackground {
+            let heuristicMask = makeForegroundMask(samples: samples, grid: grid, threshold: settings.backgroundThreshold)
+            let visionMask: [Float]?
+            if settings.useVisionForegroundMask, #available(iOS 17.0, *) {
+                visionMask = makeVisionForegroundMask(cgImage: cgImage, grid: grid)
+            } else {
+                visionMask = nil
+            }
+            mask = mergeForegroundMasks(vision: visionMask, heuristic: heuristicMask, grid: grid)
+        }
+
         var heights = makeShapeAwareHeightMap(luminance: luminance, mask: mask, grid: grid, settings: settings)
         for _ in 0..<settings.smoothingPasses { heights = smooth(heights, grid: grid, mask: mask) }
         if settings.subjectCutout && settings.removeBackground {
@@ -93,6 +108,86 @@ final class ReliefMeshBuilder {
             if !cutout.isEmpty { return cutout }
         }
         return makeFlatBackMesh(heights: heights, mask: mask, grid: grid, imageSize: image.size)
+    }
+
+    @available(iOS 17.0, *)
+    private func makeVisionForegroundMask(cgImage: CGImage, grid: Int) -> [Float]? {
+        do {
+            let request = VNGenerateForegroundInstanceMaskRequest()
+            let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
+            try handler.perform([request])
+            guard let result = request.results?.first, !result.allInstances.isEmpty else { return nil }
+            let pixelBuffer = try result.generateScaledMaskForImage(forInstances: result.allInstances, from: handler)
+            return gridMask(from: pixelBuffer, grid: grid)
+        } catch {
+            return nil
+        }
+    }
+
+    private func gridMask(from pixelBuffer: CVPixelBuffer, grid: Int) -> [Float]? {
+        let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
+        let context = CIContext(options: nil)
+        guard let cgMask = context.createCGImage(ciImage, from: ciImage.extent) else { return nil }
+        return sampleMaskPixels(cgImage: cgMask, grid: grid)
+    }
+
+    private func sampleMaskPixels(cgImage: CGImage, grid: Int) -> [Float]? {
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        var bytes = [UInt8](repeating: 0, count: grid * grid * 4)
+        guard let bitmap = CGContext(data: &bytes,
+                                     width: grid,
+                                     height: grid,
+                                     bitsPerComponent: 8,
+                                     bytesPerRow: grid * 4,
+                                     space: colorSpace,
+                                     bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        bitmap.interpolationQuality = .high
+        bitmap.draw(cgImage, in: CGRect(x: 0, y: 0, width: grid, height: grid))
+        var mask: [Float] = []
+        mask.reserveCapacity(grid * grid)
+        for y in 0..<grid {
+            for x in 0..<grid {
+                let i = (y * grid + x) * 4
+                let r = Float(bytes[i]) / 255
+                let g = Float(bytes[i + 1]) / 255
+                let b = Float(bytes[i + 2]) / 255
+                let a = Float(bytes[i + 3]) / 255
+                mask.append(max(a, max(r, max(g, b))))
+            }
+        }
+        return cleanVisionMask(mask, grid: grid)
+    }
+
+    private func mergeForegroundMasks(vision: [Float]?, heuristic: [Float], grid: Int) -> [Float] {
+        guard let vision, vision.count == heuristic.count else { return heuristic }
+        var merged = [Float](repeating: 0, count: heuristic.count)
+        for i in heuristic.indices {
+            // Vision is the boss when it is confident; heuristic only fills small missed edges.
+            merged[i] = max(vision[i], heuristic[i] * 0.35)
+        }
+        merged = closeSmallMaskHoles(merged, grid: grid)
+        return merged.map { $0 < 0.20 ? 0 : min(1, $0) }
+    }
+
+    private func cleanVisionMask(_ values: [Float], grid: Int) -> [Float] {
+        var out = values.map { $0 < 0.10 ? 0 : min(1, $0) }
+        out = closeSmallMaskHoles(out, grid: grid)
+        out = smoothMask(out, grid: grid)
+        return out.map { $0 < 0.18 ? 0 : min(1, $0) }
+    }
+
+    private func closeSmallMaskHoles(_ values: [Float], grid: Int) -> [Float] {
+        var out = values
+        for y in 1..<(grid - 1) {
+            for x in 1..<(grid - 1) {
+                let idx = y * grid + x
+                let n = [values[(y - 1) * grid + x], values[(y + 1) * grid + x], values[y * grid + x - 1], values[y * grid + x + 1]]
+                let strongNeighbors = n.filter { $0 > 0.55 }.count
+                if values[idx] < 0.20 && strongNeighbors >= 3 { out[idx] = 0.65 }
+                if values[idx] > 0.15 && strongNeighbors >= 2 { out[idx] = max(out[idx], 0.45) }
+            }
+        }
+        return out
     }
 
     private func samplePixels(cgImage: CGImage, grid: Int) throws -> [PixelSample] {
