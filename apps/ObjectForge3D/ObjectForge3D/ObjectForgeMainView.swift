@@ -37,9 +37,18 @@ struct ObjectForgeMainView: View {
 
                     if !displayMesh.isEmpty {
                         FixedSceneKitPreview(mesh: displayMesh)
-                            .frame(height: 370)
+                            .frame(height: 390)
                             .clipShape(RoundedRectangle(cornerRadius: 18))
                             .overlay(alignment: .topLeading) { confidenceLegend.padding(10) }
+                            .overlay(alignment: .topTrailing) {
+                                Text("PREVIEW FIX 1")
+                                    .font(.caption2.weight(.black))
+                                    .padding(.horizontal, 9)
+                                    .padding(.vertical, 6)
+                                    .background(.thinMaterial)
+                                    .clipShape(Capsule())
+                                    .padding(10)
+                            }
                             .overlay(alignment: .bottomTrailing) {
                                 Text("drag / pinch / rotate")
                                     .font(.caption2.weight(.semibold))
@@ -48,7 +57,9 @@ struct ObjectForgeMainView: View {
                                     .clipShape(Capsule())
                                     .padding(10)
                             }
-                            .id(displayMesh.vertices.count + displayMesh.triangles.count)
+                            .id(displayMesh.vertices.count + displayMesh.triangles.count + Int(widthMM) + Int(heightMM) + Int(depthMM))
+
+                        MeshStatsStrip(mesh: displayMesh)
 
                         DimensionEditPanel(widthMM: $widthMM,
                                            heightMM: $heightMM,
@@ -128,8 +139,11 @@ struct ObjectForgeMainView: View {
             Text("3D preview appears here after generation")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+            Text("Preview Fix 1 will auto-center, brighten, and wireframe the model.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
         }
-        .frame(maxWidth: .infinity, minHeight: 210)
+        .frame(maxWidth: .infinity, minHeight: 230)
         .background(Color(uiColor: .secondarySystemBackground))
         .clipShape(RoundedRectangle(cornerRadius: 18))
     }
@@ -231,7 +245,7 @@ struct ObjectForgeMainView: View {
                 DispatchQueue.main.async {
                     self.baseMesh = mesh
                     self.displayMesh = scaled
-                    self.status = "Generated \(scaled.vertices.count) vertices and \(scaled.triangles.count) triangles. Preview fixed."
+                    self.status = "Preview Fix 1: generated \(scaled.vertices.count) vertices / \(scaled.triangles.count) triangles."
                     self.isWorking = false
                 }
             } catch {
@@ -272,21 +286,60 @@ struct ObjectForgeMainView: View {
     }
 }
 
+struct MeshStatsStrip: View {
+    let mesh: MeshModel
+
+    private var dimsText: String {
+        let b = mesh.boundingBox()
+        let w = Int((b.maxX - b.minX).rounded())
+        let h = Int((b.maxY - b.minY).rounded())
+        let d = Int((b.maxZ - b.minZ).rounded())
+        return "\(w) × \(h) × \(d) mm"
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Label("Mesh generated", systemImage: "checkmark.seal.fill")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.green)
+                Spacer()
+                Text(dimsText)
+                    .font(.caption.monospacedDigit().weight(.semibold))
+                    .foregroundStyle(.secondary)
+            }
+            HStack(spacing: 12) {
+                Text("Vertices: \(mesh.vertices.count)")
+                Text("Triangles: \(mesh.triangles.count)")
+                Text("Auto-fit preview")
+            }
+            .font(.caption.monospacedDigit())
+            .foregroundStyle(.secondary)
+        }
+        .padding()
+        .background(Color(uiColor: .secondarySystemBackground))
+        .clipShape(RoundedRectangle(cornerRadius: 16))
+    }
+}
+
 struct FixedSceneKitPreview: UIViewRepresentable {
     var mesh: MeshModel
 
     func makeUIView(context: Context) -> SCNView {
         let view = SCNView()
-        view.backgroundColor = .secondarySystemBackground
+        view.backgroundColor = .black
         view.allowsCameraControl = true
-        view.autoenablesDefaultLighting = true
+        view.autoenablesDefaultLighting = false
+        view.antialiasingMode = .multisampling4X
         installScene(on: view)
         return view
     }
 
     func updateUIView(_ view: SCNView, context: Context) {
+        view.backgroundColor = .black
         view.allowsCameraControl = true
-        view.autoenablesDefaultLighting = true
+        view.autoenablesDefaultLighting = false
+        view.antialiasingMode = .multisampling4X
         installScene(on: view)
     }
 
@@ -298,13 +351,15 @@ struct FixedSceneKitPreview: UIViewRepresentable {
 
     private func makeScene() -> SCNScene {
         let scene = SCNScene()
-        scene.background.contents = UIColor.secondarySystemBackground
+        scene.background.contents = UIColor.black
 
         let bounds = mesh.boundingBox()
         let width = max(bounds.maxX - bounds.minX, 1)
         let height = max(bounds.maxY - bounds.minY, 1)
         let depth = max(bounds.maxZ - bounds.minZ, 1)
         let maxDim = max(width, max(height, depth))
+        let centerX = (bounds.minX + bounds.maxX) / 2
+        let centerY = (bounds.minY + bounds.maxY) / 2
         let centerZ = (bounds.minZ + bounds.maxZ) / 2
 
         let target = SCNNode()
@@ -313,21 +368,47 @@ struct FixedSceneKitPreview: UIViewRepresentable {
         scene.rootNode.addChildNode(target)
 
         if !mesh.isEmpty {
-            let node = SCNNode(geometry: mesh.makeSceneGeometry())
-            node.name = "objectforge-mesh"
-            node.position = SCNVector3(0, 0, -centerZ)
-            node.eulerAngles = SCNVector3(-Float.pi / 10, Float.pi / 8, 0)
-            scene.rootNode.addChildNode(node)
+            let solidGeometry = mesh.makeSceneGeometry()
+            let solidMaterial = SCNMaterial()
+            solidMaterial.diffuse.contents = UIColor.systemCyan
+            solidMaterial.emission.contents = UIColor(red: 0.0, green: 0.18, blue: 0.24, alpha: 1.0)
+            solidMaterial.specular.contents = UIColor.white
+            solidMaterial.shininess = 0.9
+            solidMaterial.isDoubleSided = true
+            solidGeometry.materials = [solidMaterial]
+
+            let solidNode = SCNNode(geometry: solidGeometry)
+            solidNode.name = "objectforge-solid-mesh"
+            solidNode.position = SCNVector3(-centerX, -centerY, -centerZ)
+            solidNode.eulerAngles = SCNVector3(-Float.pi / 8, Float.pi / 10, 0)
+            scene.rootNode.addChildNode(solidNode)
+
+            let wireGeometry = mesh.makeSceneGeometry()
+            let wireMaterial = SCNMaterial()
+            wireMaterial.diffuse.contents = UIColor.white.withAlphaComponent(0.78)
+            wireMaterial.emission.contents = UIColor.white.withAlphaComponent(0.48)
+            wireMaterial.isDoubleSided = true
+            wireMaterial.fillMode = .lines
+            wireGeometry.materials = [wireMaterial]
+
+            let wireNode = SCNNode(geometry: wireGeometry)
+            wireNode.name = "objectforge-wire-mesh"
+            wireNode.position = solidNode.position
+            wireNode.eulerAngles = solidNode.eulerAngles
+            wireNode.scale = SCNVector3(1.002, 1.002, 1.002)
+            wireNode.renderingOrder = 20
+            scene.rootNode.addChildNode(wireNode)
         }
 
         let camera = SCNNode()
         camera.name = "objectforge-camera"
         let scnCamera = SCNCamera()
-        scnCamera.fieldOfView = 42
+        scnCamera.usesOrthographicProjection = true
+        scnCamera.orthographicScale = Double(max(width, height) * 1.35)
         scnCamera.zNear = 0.01
-        scnCamera.zFar = Double(max(maxDim * 30, Float(1000)))
+        scnCamera.zFar = Double(max(maxDim * 40, Float(2000)))
         camera.camera = scnCamera
-        camera.position = SCNVector3(0, 0, max(maxDim * 2.6, Float(180)))
+        camera.position = SCNVector3(0, -maxDim * 0.92, maxDim * 1.55)
         let lookAt = SCNLookAtConstraint(target: target)
         lookAt.isGimbalLockEnabled = true
         camera.constraints = [lookAt]
@@ -336,14 +417,21 @@ struct FixedSceneKitPreview: UIViewRepresentable {
         let keyLight = SCNNode()
         keyLight.light = SCNLight()
         keyLight.light?.type = .omni
-        keyLight.light?.intensity = 1200
-        keyLight.position = SCNVector3(-maxDim, maxDim, maxDim * 2)
+        keyLight.light?.intensity = 2600
+        keyLight.position = SCNVector3(-maxDim * 0.8, -maxDim * 1.2, maxDim * 2.1)
         scene.rootNode.addChildNode(keyLight)
+
+        let sideLight = SCNNode()
+        sideLight.light = SCNLight()
+        sideLight.light?.type = .directional
+        sideLight.light?.intensity = 850
+        sideLight.eulerAngles = SCNVector3(-Float.pi / 4, Float.pi / 5, 0)
+        scene.rootNode.addChildNode(sideLight)
 
         let fillLight = SCNNode()
         fillLight.light = SCNLight()
         fillLight.light?.type = .ambient
-        fillLight.light?.color = UIColor(white: 0.55, alpha: 1)
+        fillLight.light?.color = UIColor(white: 0.72, alpha: 1)
         scene.rootNode.addChildNode(fillLight)
 
         return scene
