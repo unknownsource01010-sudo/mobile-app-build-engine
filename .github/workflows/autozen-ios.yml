@@ -52,7 +52,7 @@ jobs:
           cd "$PROJECT_ROOT"
           xcodebuild \
             -project AutoZenIOS.xcodeproj \
-            -scheme AutoZen \
+            -scheme AutoZenIOS \
             -configuration Release \
             -sdk iphoneos \
             -derivedDataPath "$RUNNER_TEMP/autozen-derived" \
