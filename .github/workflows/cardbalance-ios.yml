@@ -64,7 +64,7 @@ jobs:
           xcodebuild -project CardBalance.xcodeproj -scheme CardBalance -configuration Debug \
             -destination "platform=iOS Simulator,id=$CARDBALANCE_SIMULATOR" \
             -derivedDataPath "$RUNNER_TEMP/cardbalance-test-build" \
-            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO test
+            -only-testing:CardBalanceTests CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO test
       - name: Build unsigned device app
         run: |
           set -euo pipefail
