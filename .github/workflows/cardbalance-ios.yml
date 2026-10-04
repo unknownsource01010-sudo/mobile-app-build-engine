@@ -33,6 +33,13 @@ jobs:
           set -euo pipefail
           cd "$SRC"
           xcodebuild -version
+          mkdir -p CardBalance/Assets.xcassets/AppIcon.appiconset
+          cat > CardBalance/Assets.xcassets/AppIcon.appiconset/Contents.json <<'JSON'
+          {
+            "images": [],
+            "info": { "author": "xcode", "version": 1 }
+          }
+          JSON
           xcodegen generate
       - name: Select available iPhone simulator
         run: |
