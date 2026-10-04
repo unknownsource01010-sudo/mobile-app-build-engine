@@ -1,0 +1,40 @@
+name: Frankie Next Brain Tests
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'Frankie-Next/**'
+      - '.github/workflows/frankie-next.yml'
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Syntax check
+        run: python3 -m py_compile Frankie-Next/engine/frankie_brain.py Frankie-Next/bench/runner.py
+      - name: Test fingerprint stability
+        run: |
+          A="$(python3 Frankie-Next/engine/frankie_brain.py --db /tmp/f.db fingerprint '/tmp/a/main.swift: error: missing scheme' --toolchain xcode --platform ios)"
+          B="$(python3 Frankie-Next/engine/frankie_brain.py --db /tmp/f.db fingerprint '/Users/runner/a/main.swift: error: missing scheme' --toolchain xcode --platform ios)"
+          test "$A" = "$B"
+      - name: Test verified learning and recall
+        run: |
+          python3 Frankie-Next/engine/frankie_brain.py --db /tmp/f.db verify 'xcodebuild: error: scheme missing' --toolchain xcode --platform ios --fix 'discover generated scheme' --verify-cmd 'true' --teacher qwen
+          python3 Frankie-Next/engine/frankie_brain.py --db /tmp/f.db recall 'xcodebuild: error: scheme missing' --toolchain xcode --platform ios | grep verified
+      - name: Test failed repair memory
+        shell: bash
+        run: |
+          set +e
+          python3 Frankie-Next/engine/frankie_brain.py --db /tmp/f.db verify 'compiler error sample' --fix 'bad proposed fix' --verify-cmd 'false' --teacher qwen
+          test $? -ne 0
+          set -e
+          python3 Frankie-Next/engine/frankie_brain.py --db /tmp/f.db recall 'compiler error sample' | grep failed
+      - name: Test Brain Pack export/import
+        run: |
+          python3 Frankie-Next/engine/frankie_brain.py --db /tmp/f.db export /tmp/brain.jsonl
+          test -s /tmp/brain.jsonl
+          python3 Frankie-Next/engine/frankie_brain.py --db /tmp/import.db import /tmp/brain.jsonl
+          python3 Frankie-Next/engine/frankie_brain.py --db /tmp/import.db recall 'xcodebuild: error: scheme missing' --toolchain xcode --platform ios | grep verified
