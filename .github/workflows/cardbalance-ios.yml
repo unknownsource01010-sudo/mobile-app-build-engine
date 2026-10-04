@@ -1,0 +1,99 @@
+name: CardBalance v0.3 IPA
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'CardBalance-v0.3.0-Landscape-GitHub.zip'
+      - '.github/workflows/cardbalance-ios.yml'
+permissions:
+  contents: read
+concurrency:
+  group: cardbalance-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - name: Unpack CardBalance source
+        run: |
+          set -euo pipefail
+          rm -rf "$RUNNER_TEMP/CardBalanceSource"
+          mkdir -p "$RUNNER_TEMP/CardBalanceSource"
+          unzip -q CardBalance-v0.3.0-Landscape-GitHub.zip -d "$RUNNER_TEMP/CardBalanceSource"
+          echo "SRC=$RUNNER_TEMP/CardBalanceSource" >> "$GITHUB_ENV"
+      - name: Check balance reader
+        run: cd "$SRC" && node scripts/check-bridge.cjs
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Generate project
+        run: |
+          set -euo pipefail
+          cd "$SRC"
+          xcodebuild -version
+          xcodegen generate
+      - name: Select available iPhone simulator
+        run: |
+          set -euo pipefail
+          xcrun simctl list devices available --json > "$RUNNER_TEMP/cardbalance-devices.json"
+          python3 - <<'PY'
+          import json, os
+          with open(os.path.join(os.environ['RUNNER_TEMP'], 'cardbalance-devices.json')) as f:
+              data = json.load(f)
+          phones = [d for runtime, devices in data['devices'].items() if '.iOS-' in runtime
+                    for d in devices if d.get('isAvailable') and d['name'].startswith('iPhone')]
+          if not phones:
+              raise SystemExit('No available iOS simulator found on runner')
+          with open(os.environ['GITHUB_ENV'], 'a') as f:
+              f.write('CARDBALANCE_SIMULATOR=' + phones[0]['udid'] + '\n')
+          print('Selected simulator:', phones[0]['name'])
+          PY
+      - name: Run iOS regression tests
+        run: |
+          set -euo pipefail
+          cd "$SRC"
+          xcodebuild -project CardBalance.xcodeproj -scheme CardBalance -configuration Debug \
+            -destination "platform=iOS Simulator,id=$CARDBALANCE_SIMULATOR" \
+            -derivedDataPath "$RUNNER_TEMP/cardbalance-test-build" \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO test
+      - name: Build unsigned device app
+        run: |
+          set -euo pipefail
+          cd "$SRC"
+          xcodebuild -project CardBalance.xcodeproj -scheme CardBalance -configuration Release \
+            -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath "$RUNNER_TEMP/cardbalance-build" \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" build
+      - name: Verify and package IPA
+        run: |
+          set -euo pipefail
+          app_path="$RUNNER_TEMP/cardbalance-build/Build/Products/Release-iphoneos/CardBalance.app"
+          test -d "$app_path"
+          python3 - "$app_path" <<'PY'
+          import pathlib, plistlib, sys
+          app = pathlib.Path(sys.argv[1])
+          with (app / 'Info.plist').open('rb') as f:
+              info = plistlib.load(f)
+          assert 'UILaunchScreen' in info
+          assert info.get('UIRequiresFullScreen') is True
+          assert info.get('CFBundleShortVersionString') == '0.3.0'
+          assert set(info['UISupportedInterfaceOrientations']) == {'UIInterfaceOrientationLandscapeLeft','UIInterfaceOrientationLandscapeRight'}
+          assert (app / 'BalanceBridge.js').is_file()
+          assert (app / 'CardBalance').is_file()
+          print('CardBalance device build verified.')
+          PY
+          mkdir -p "$RUNNER_TEMP/cardbalance-release/Payload"
+          cp -R "$app_path" "$RUNNER_TEMP/cardbalance-release/Payload/"
+          cd "$RUNNER_TEMP/cardbalance-release"
+          zip -qry CardBalance-v0.3.0-unsigned.ipa Payload
+          unzip -tq CardBalance-v0.3.0-unsigned.ipa
+          shasum -a 256 CardBalance-v0.3.0-unsigned.ipa > CardBalance-v0.3.0-unsigned.ipa.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CardBalance-v0.3.0-unsigned-ipa
+          path: |
+            ${{ runner.temp }}/cardbalance-release/CardBalance-v0.3.0-unsigned.ipa
+            ${{ runner.temp }}/cardbalance-release/CardBalance-v0.3.0-unsigned.ipa.sha256
+          retention-days: 1
+          if-no-files-found: error
