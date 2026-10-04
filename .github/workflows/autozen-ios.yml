@@ -51,7 +51,7 @@ jobs:
           set -euo pipefail
           cd "$PROJECT_ROOT"
           xcodebuild \
-            -project AutoZen.xcodeproj \
+            -project AutoZenIOS.xcodeproj \
             -scheme AutoZen \
             -configuration Release \
             -sdk iphoneos \
