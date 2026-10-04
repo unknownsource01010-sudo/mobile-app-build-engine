@@ -1,0 +1,82 @@
+name: AutoZen v1.2 IPA
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'AutoZen-v1.2.0-CardBalance-UI-source.zip'
+      - '.github/workflows/autozen-ios.yml'
+  workflow_dispatch:
+
+jobs:
+  build-autozen:
+    runs-on: macos-15
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Unpack AutoZen source
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$RUNNER_TEMP/autozen"
+          mkdir -p "$RUNNER_TEMP/autozen"
+          ditto -x -k "AutoZen-v1.2.0-CardBalance-UI-source.zip" "$RUNNER_TEMP/autozen"
+          echo "AUTOZEN_ROOT=$RUNNER_TEMP/autozen" >> "$GITHUB_ENV"
+          find "$RUNNER_TEMP/autozen" -maxdepth 3 -type f | sort
+
+      - name: Locate project root
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT="$(find "$AUTOZEN_ROOT" -name project.yml -print -quit | xargs dirname)"
+          test -n "$ROOT"
+          echo "PROJECT_ROOT=$ROOT" >> "$GITHUB_ENV"
+          echo "Project root: $ROOT"
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$PROJECT_ROOT"
+          xcodegen generate
+
+      - name: Build AutoZen for iPhone
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$PROJECT_ROOT"
+          xcodebuild \
+            -project AutoZen.xcodeproj \
+            -scheme AutoZen \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath "$RUNNER_TEMP/autozen-derived" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build
+
+      - name: Package unsigned IPA
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP="$(find "$RUNNER_TEMP/autozen-derived/Build/Products/Release-iphoneos" -maxdepth 1 -name '*.app' -print -quit)"
+          test -n "$APP"
+          rm -rf "$RUNNER_TEMP/package"
+          mkdir -p "$RUNNER_TEMP/package/Payload"
+          cp -R "$APP" "$RUNNER_TEMP/package/Payload/"
+          cd "$RUNNER_TEMP/package"
+          /usr/bin/zip -qry "$GITHUB_WORKSPACE/AutoZen-v1.2.0-unsigned.ipa" Payload
+          /usr/bin/shasum -a 256 "$GITHUB_WORKSPACE/AutoZen-v1.2.0-unsigned.ipa"
+
+      - name: Upload AutoZen IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: AutoZen-v1.2.0-unsigned-ipa
+          path: AutoZen-v1.2.0-unsigned.ipa
+          if-no-files-found: error
