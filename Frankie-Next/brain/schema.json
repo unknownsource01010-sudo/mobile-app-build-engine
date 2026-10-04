@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "error_record": {
+    "fingerprint": "sha256(normalized_error + toolchain + platform)",
+    "category": "compiler|runtime|ci|dependency|configuration|network|other",
+    "toolchain": {},
+    "normalized_error": "",
+    "root_causes": [],
+    "attempts": [],
+    "successful_fix": null,
+    "verification": [],
+    "confidence": 0.0,
+    "teacher": null,
+    "created_at": "",
+    "updated_at": ""
+  }
+}
