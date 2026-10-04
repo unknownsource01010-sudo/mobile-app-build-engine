@@ -1,0 +1,9 @@
+{
+  "name":"Frankie Next",
+  "version":"0.1.0",
+  "brain_schema":1,
+  "original_frankie_modified":false,
+  "teacher_policy":"suggestions require verification",
+  "portable_brain_pack":true,
+  "default_auto_apply_min_confidence":0.90
+}
