@@ -24,7 +24,7 @@ jobs:
         run: |
           set -euo pipefail
           cat BountyBotNativeBundle.part*.b64 > "$RUNNER_TEMP/bountybot.b64"
-          base64 --decode "$RUNNER_TEMP/bountybot.b64" > "$RUNNER_TEMP/BountyBotNative.zip"
+          base64 -D -i "$RUNNER_TEMP/bountybot.b64" -o "$RUNNER_TEMP/BountyBotNative.zip"
           mkdir -p "$RUNNER_TEMP/src"
           ditto -x -k "$RUNNER_TEMP/BountyBotNative.zip" "$RUNNER_TEMP/src"
           test -f "$RUNNER_TEMP/src/BountyBotNative/project.yml"
