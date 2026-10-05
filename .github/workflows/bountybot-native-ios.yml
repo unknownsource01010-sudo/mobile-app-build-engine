@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -107,13 +107,29 @@ jobs:
           /usr/bin/shasum -a 256 "$GITHUB_WORKSPACE/BountyBot-Native-Swift-v1.0.0-unsigned.ipa" | tee "$GITHUB_WORKSPACE/BountyBot-Native-Swift-v1.0.0-unsigned.ipa.sha256"
           cp "$RUNNER_TEMP/BountyBotNative.zip" "$GITHUB_WORKSPACE/BountyBot-Native-Swift-v1.0.0-SOURCE.zip"
 
-      - name: Upload native iOS package
-        uses: actions/upload-artifact@v4
-        with:
-          name: BountyBot-Native-Swift-v1.0.0-iOS
-          path: |
-            BountyBot-Native-Swift-v1.0.0-unsigned.ipa
-            BountyBot-Native-Swift-v1.0.0-unsigned.ipa.sha256
-            BountyBot-Native-Swift-v1.0.0-SOURCE.zip
-          if-no-files-found: error
-          retention-days: 14
+      - name: Publish native iOS package to repository
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p BountyBotBuildOutput
+          cp BountyBot-Native-Swift-v1.0.0-unsigned.ipa BountyBotBuildOutput/
+          cp BountyBot-Native-Swift-v1.0.0-unsigned.ipa.sha256 BountyBotBuildOutput/
+          cp BountyBot-Native-Swift-v1.0.0-SOURCE.zip BountyBotBuildOutput/
+          cat > BountyBotBuildOutput/BUILD-INFO.txt <<EOF
+          Native SwiftUI build: yes
+          Web wrapper: no
+          Bundled PNG scenes: hero, lost, newdeal, pricedrop, highnoon, train
+          Deal Lost jail-bar animation: yes
+          High Noon animation: yes
+          Train Hunt animation: yes
+          Commit: $GITHUB_SHA
+          EOF
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add BountyBotBuildOutput
+          if git diff --cached --quiet; then
+            echo "Build output unchanged."
+          else
+            git commit -m "Publish Bounty Bot native iOS build [skip ci]"
+            git push origin HEAD:main
+          fi
