@@ -32,6 +32,9 @@ jobs:
           test -s "$RUNNER_TEMP/src/BountyBotNative/Resources/hero.png"
           test -s "$RUNNER_TEMP/src/BountyBotNative/Resources/highnoon.png"
           test -s "$RUNNER_TEMP/src/BountyBotNative/Resources/train.png"
+          test -s "$RUNNER_TEMP/src/BountyBotNative/Resources/lost.png"
+          test -s "$RUNNER_TEMP/src/BountyBotNative/Resources/newdeal.png"
+          test -s "$RUNNER_TEMP/src/BountyBotNative/Resources/pricedrop.png"
           echo "PROJECT_ROOT=$RUNNER_TEMP/src/BountyBotNative" >> "$GITHUB_ENV"
 
       - name: Verify native Swift source and bundled PNG art
@@ -45,6 +48,9 @@ jobs:
           /usr/bin/file "$PROJECT_ROOT/Resources/hero.png"
           /usr/bin/file "$PROJECT_ROOT/Resources/highnoon.png"
           /usr/bin/file "$PROJECT_ROOT/Resources/train.png"
+          /usr/bin/file "$PROJECT_ROOT/Resources/lost.png"
+          /usr/bin/file "$PROJECT_ROOT/Resources/newdeal.png"
+          /usr/bin/file "$PROJECT_ROOT/Resources/pricedrop.png"
 
       - name: Install XcodeGen
         run: brew install xcodegen
@@ -82,9 +88,12 @@ jobs:
           test -s "$APP/hero.png"
           test -s "$APP/highnoon.png"
           test -s "$APP/train.png"
+          test -s "$APP/lost.png"
+          test -s "$APP/newdeal.png"
+          test -s "$APP/pricedrop.png"
           echo "APP_PATH=$APP" >> "$GITHUB_ENV"
           echo "Bundled scene art verified:"
-          ls -lh "$APP/hero.png" "$APP/highnoon.png" "$APP/train.png"
+          ls -lh "$APP/hero.png" "$APP/highnoon.png" "$APP/train.png" "$APP/lost.png" "$APP/newdeal.png" "$APP/pricedrop.png"
 
       - name: Package unsigned IPA
         shell: bash
