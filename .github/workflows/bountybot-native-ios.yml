@@ -1,0 +1,110 @@
+name: Bounty Bot Native iOS IPA
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'BountyBotNativeBundle.part*.b64'
+      - '.github/workflows/bountybot-native-ios.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Rebuild source archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat BountyBotNativeBundle.part*.b64 > "$RUNNER_TEMP/bountybot.b64"
+          base64 --decode "$RUNNER_TEMP/bountybot.b64" > "$RUNNER_TEMP/BountyBotNative.zip"
+          mkdir -p "$RUNNER_TEMP/src"
+          ditto -x -k "$RUNNER_TEMP/BountyBotNative.zip" "$RUNNER_TEMP/src"
+          test -f "$RUNNER_TEMP/src/BountyBotNative/project.yml"
+          test -f "$RUNNER_TEMP/src/BountyBotNative/App/BountyBotApp.swift"
+          test -s "$RUNNER_TEMP/src/BountyBotNative/Resources/hero.png"
+          test -s "$RUNNER_TEMP/src/BountyBotNative/Resources/highnoon.png"
+          test -s "$RUNNER_TEMP/src/BountyBotNative/Resources/train.png"
+          echo "PROJECT_ROOT=$RUNNER_TEMP/src/BountyBotNative" >> "$GITHUB_ENV"
+
+      - name: Verify native Swift source and bundled PNG art
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q 'import SwiftUI' "$PROJECT_ROOT/App/BountyBotApp.swift"
+          grep -q 'JailBars' "$PROJECT_ROOT/App/BountyBotApp.swift"
+          grep -q 'HIGH NOON' "$PROJECT_ROOT/App/BountyBotApp.swift"
+          grep -q 'HUNT IN MOTION' "$PROJECT_ROOT/App/BountyBotApp.swift"
+          /usr/bin/file "$PROJECT_ROOT/Resources/hero.png"
+          /usr/bin/file "$PROJECT_ROOT/Resources/highnoon.png"
+          /usr/bin/file "$PROJECT_ROOT/Resources/train.png"
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$PROJECT_ROOT"
+          xcodegen generate
+
+      - name: Build native Bounty Bot for iPhone
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$PROJECT_ROOT"
+          xcodebuild \
+            -project BountyBotNative.xcodeproj \
+            -scheme BountyBotNative \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$RUNNER_TEMP/bounty-derived" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY='' \
+            build | tee "$RUNNER_TEMP/xcodebuild.log"
+
+      - name: Verify bundle contains scene PNGs
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP="$(find "$RUNNER_TEMP/bounty-derived/Build/Products/Release-iphoneos" -maxdepth 1 -name '*.app' -print -quit)"
+          test -n "$APP"
+          test -s "$APP/hero.png"
+          test -s "$APP/highnoon.png"
+          test -s "$APP/train.png"
+          echo "APP_PATH=$APP" >> "$GITHUB_ENV"
+          echo "Bundled scene art verified:"
+          ls -lh "$APP/hero.png" "$APP/highnoon.png" "$APP/train.png"
+
+      - name: Package unsigned IPA
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$RUNNER_TEMP/package"
+          mkdir -p "$RUNNER_TEMP/package/Payload"
+          cp -R "$APP_PATH" "$RUNNER_TEMP/package/Payload/"
+          cd "$RUNNER_TEMP/package"
+          /usr/bin/zip -qry "$GITHUB_WORKSPACE/BountyBot-Native-Swift-v1.0.0-unsigned.ipa" Payload
+          /usr/bin/shasum -a 256 "$GITHUB_WORKSPACE/BountyBot-Native-Swift-v1.0.0-unsigned.ipa" | tee "$GITHUB_WORKSPACE/BountyBot-Native-Swift-v1.0.0-unsigned.ipa.sha256"
+          cp "$RUNNER_TEMP/BountyBotNative.zip" "$GITHUB_WORKSPACE/BountyBot-Native-Swift-v1.0.0-SOURCE.zip"
+
+      - name: Upload native iOS package
+        uses: actions/upload-artifact@v4
+        with:
+          name: BountyBot-Native-Swift-v1.0.0-iOS
+          path: |
+            BountyBot-Native-Swift-v1.0.0-unsigned.ipa
+            BountyBot-Native-Swift-v1.0.0-unsigned.ipa.sha256
+            BountyBot-Native-Swift-v1.0.0-SOURCE.zip
+          if-no-files-found: error
+          retention-days: 14
