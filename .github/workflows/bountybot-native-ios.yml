@@ -133,3 +133,13 @@ jobs:
             git commit -m "Publish Bounty Bot native iOS build [skip ci]"
             git push origin HEAD:main
           fi
+
+      - name: Upload Bounty Bot artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: BountyBot-Native-Swift-v1.0.0
+          path: |
+            BountyBot-Native-Swift-v1.0.0-unsigned.ipa
+            BountyBot-Native-Swift-v1.0.0-unsigned.ipa.sha256
+            BountyBot-Native-Swift-v1.0.0-SOURCE.zip
+          if-no-files-found: error
