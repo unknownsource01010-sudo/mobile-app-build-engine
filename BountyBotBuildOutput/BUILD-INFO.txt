@@ -4,4 +4,4 @@ Bundled PNG scenes: hero, lost, newdeal, pricedrop, highnoon, train
 Deal Lost jail-bar animation: yes
 High Noon animation: yes
 Train Hunt animation: yes
-Commit: 83fa3ca8b054a7e7e2deb2a8d55b7656136efe76
+Commit: b6e60267ceb13956e06e398466249cf5051666d4
